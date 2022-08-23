@@ -93,6 +93,11 @@ async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<()> {
             let last_segment = path.to_string_lossy().split('/').last()?.to_owned();
             let decoded = hex::decode(last_segment).ok()?;
 
+            // all valid files are sha256 hashes
+            if decoded.len() != 32 {
+                return None;
+            }
+
             Some((path, decoded))
         })
         .collect();
@@ -115,14 +120,9 @@ async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<()> {
         .into_iter()
         .filter(|(_path, hash)| !existing_hashes.contains(hash))
     {
-        if !path.is_file() {
-            continue;
-        }
-
-        if let Some(file) = evaluate_file(path).await {
-            files.push(file);
-        } else {
-            tracing::warn!("could not evaluate file: {}", hex::encode(hash));
+        match evaluate_file(path).await {
+            Ok(file) => files.push(file),
+            Err(err) => tracing::warn!("could not evaluate file {}: {}", hex::encode(hash), err),
         }
     }
 
@@ -155,13 +155,13 @@ async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<()> {
     Ok(())
 }
 
-async fn evaluate_file(path: PathBuf) -> Option<File> {
+async fn evaluate_file(path: PathBuf) -> Result<File> {
     tracing::trace!("evaluating {}", path.to_string_lossy());
 
-    let mut file = tokio::fs::File::open(&path).await.ok()?;
+    let mut file = tokio::fs::File::open(&path).await?;
 
     let mut contents = Vec::with_capacity(2_000_000);
-    let mut _read = file.read_to_end(&mut contents).await.ok()?;
+    let mut _read = file.read_to_end(&mut contents).await?;
 
     let digest = Sha256::digest(&contents);
     let mime_type = infer::get(&contents).map(|inf| inf.mime_type().to_string());
@@ -172,7 +172,7 @@ async fn evaluate_file(path: PathBuf) -> Option<File> {
         .map(|dim| (Some(dim.0 as i32), Some(dim.1 as i32)))
         .unwrap_or_default();
 
-    Some(File {
+    Ok(File {
         hash: digest.to_vec(),
         size: contents.len() as i32,
         mime_type,
