@@ -111,6 +111,11 @@ async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<()> {
         }
     }
 
+    if files.is_empty() {
+        tracing::debug!("no new files were found");
+        return Ok(());
+    }
+
     let count = files.len();
 
     let mut tx = pool.begin().await?;
@@ -146,15 +151,17 @@ async fn evaluate_file(path: PathBuf) -> Option<File> {
     let digest = Sha256::digest(&contents);
     let mime_type = infer::get(&contents).map(|inf| inf.mime_type().to_string());
 
-    let dimensions = image::load_from_memory(&contents)
+    let (width, height) = image::load_from_memory(&contents)
         .ok()
-        .map(|im| im.dimensions());
+        .map(|im| im.dimensions())
+        .map(|dim| (Some(dim.0 as i32), Some(dim.1 as i32)))
+        .unwrap_or_default();
 
     Some(File {
         hash: digest.to_vec(),
         size: contents.len() as i32,
         mime_type,
-        height: dimensions.map(|dim| dim.0 as i32),
-        width: dimensions.map(|dim| dim.1 as i32),
+        height,
+        width,
     })
 }
