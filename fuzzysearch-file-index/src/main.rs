@@ -5,7 +5,7 @@ use eyre::Result;
 use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 use image::GenericImageView;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::io::AsyncReadExt;
@@ -77,21 +77,28 @@ async fn main() -> Result<()> {
             tokio::task::spawn_blocking(move || read_dump(PathBuf::from(dump), tx));
 
             tokio_stream::wrappers::ReceiverStream::new(rx)
-                .for_each(move |item| {
+                .chunks_timeout(1_000, Duration::from_secs(10))
+                .for_each(move |items| {
                     let pool = pool.clone();
 
+                    let items: Vec<DbItem> = items
+                        .into_iter()
+                        .filter_map(|item| item.try_into().ok())
+                        .collect();
+
+                    let count = items.len();
+
                     async move {
-                        if let Some(hash) = item.sha256 {
-                            let _res = sqlx::query_file!(
-                                "queries/insert_dump.sql",
-                                hash,
-                                item.site.id(),
-                                item.id.to_string(),
-                                item.posted_at
-                            )
-                            .execute(&pool)
-                            .await;
-                        }
+                        let rows_affected = sqlx::query_file!(
+                            "queries/insert_dump.sql",
+                            serde_json::to_value(items).unwrap()
+                        )
+                        .execute(&pool)
+                        .await
+                        .unwrap()
+                        .rows_affected();
+
+                        tracing::debug!(count, rows_affected, "added associations");
                     }
                 })
                 .await;
@@ -255,6 +262,27 @@ struct Item {
     posted_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(with = "b64_vec")]
     sha256: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Serialize)]
+struct DbItem {
+    hash: String,
+    site_id: i32,
+    submission_id: String,
+    posted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl TryFrom<Item> for DbItem {
+    type Error = eyre::Report;
+
+    fn try_from(item: Item) -> Result<Self, eyre::Report> {
+        Ok(Self {
+            hash: hex::encode(item.sha256.ok_or_else(|| eyre::eyre!("missing hash"))?),
+            site_id: item.site.id(),
+            submission_id: item.id.to_string(),
+            posted_at: item.posted_at,
+        })
+    }
 }
 
 mod b64_vec {
