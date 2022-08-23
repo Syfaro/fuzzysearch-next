@@ -1,0 +1,20 @@
+[package]
+name = "fuzzysearch-file-index"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "3.2.17", features = ["env", "derive"] }
+eyre = "0.6.8"
+futures = "0.3.23"
+futures-batch = "0.6"
+hex = "0.4.3"
+image = "0.24.3"
+infer = "0.9"
+sha2 = "0.10.2"
+sqlx = { version = "0.6.1", features = ["offline", "runtime-tokio-rustls", "postgres", "json"] }
+tokio = { version = "1.20.1", features = ["macros", "sync", "rt-multi-thread", "fs"] }
+tokio-stream = { version = "0.1.9", features = ["time"] }
+tracing = "0.1.36"
+tracing-subscriber = "0.3.15"
+walkdir = "2.3.2"
