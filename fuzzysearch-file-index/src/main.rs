@@ -1,4 +1,8 @@
-use std::{collections::HashSet, path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Duration,
+};
 
 use clap::{Parser, Subcommand};
 use eyre::Result;
@@ -10,18 +14,17 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 struct Config {
     /// PostgreSQL database URL.
     #[clap(short = 'd', long, env)]
     database_url: String,
-
     /// Which function to perform.
     #[clap(subcommand)]
     command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Command {
     /// Index a directory by scanning for all unknown files.
     IndexDirectory {
@@ -35,7 +38,6 @@ enum Command {
         /// FuzzySearch dump file path.
         #[clap(env, index = 1)]
         changes: String,
-
         /// Directory to where files were downloaded.
         #[clap(env, index = 2)]
         directory: String,
@@ -47,6 +49,35 @@ enum Command {
         #[clap(env, index = 1)]
         dump: String,
     },
+
+    /// Explore data.
+    Explore {
+        #[clap(subcommand)]
+        exploration_command: ExplorationCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ExplorationCommand {
+    /// Generate an image demonstrating submission dimensions.
+    DimensionsImage {
+        /// Height of generated image.
+        #[clap(long, env, default_value = "2000")]
+        height: u32,
+        /// Width of generated image.
+        #[clap(long, env, default_value = "2000")]
+        width: u32,
+        /// If image should use colors instead of being black and white.
+        #[clap(short = 'c', long, env)]
+        use_color: bool,
+        /// Amount to scale colors. Each pixel's color will be exactly
+        /// `count * color_scale`.
+        #[clap(long, env, default_value = "10")]
+        color_scale: usize,
+        /// Name of file where image is saved.
+        #[clap(index = 1, env, default_value = "submission-dimensions.png")]
+        output: String,
+    },
 }
 
 #[tokio::main]
@@ -55,6 +86,7 @@ async fn main() -> Result<()> {
 
     tracing::info!("starting fuzzysearch-file-index");
     let config = Config::parse();
+    tracing::trace!("{:#?}", config);
 
     tracing::debug!("connecting to database");
     let pool = PgPool::connect(&config.database_url).await?;
@@ -76,7 +108,7 @@ async fn main() -> Result<()> {
                 .chunks_timeout(100, Duration::from_secs(10))
                 .map(|chunk| tokio::task::spawn(process_chunk(pool.clone(), chunk)))
                 .buffer_unordered(available_parallelism)
-                .for_each(|_| async { () })
+                .for_each(|_| async {})
                 .await;
         }
 
@@ -113,7 +145,7 @@ async fn main() -> Result<()> {
                 .chunks_timeout(100, Duration::from_secs(10))
                 .map(|chunk| tokio::task::spawn(process_chunk(pool.clone(), chunk)))
                 .buffer_unordered(available_parallelism)
-                .for_each(|_| async { () })
+                .for_each(|_| async {})
                 .await;
         }
 
@@ -150,6 +182,58 @@ async fn main() -> Result<()> {
                     }
                 })
                 .await;
+        }
+
+        Command::Explore {
+            exploration_command:
+                ExplorationCommand::DimensionsImage {
+                    height,
+                    width,
+                    use_color,
+                    color_scale,
+                    output,
+                },
+        } => {
+            type ImageDepth = u16;
+
+            let mut im = image::ImageBuffer::from_pixel(
+                width,
+                height,
+                image::Rgb([ImageDepth::MAX, ImageDepth::MAX, ImageDepth::MAX]),
+            );
+
+            let mut pixel_counts: HashMap<Dimension, usize> = HashMap::new();
+
+            let mut rows = sqlx::query_file!("queries/file_dimensions.sql").fetch(&pool);
+            while let Some(Ok(row)) = rows.next().await {
+                let dimension = match (row.height, row.width) {
+                    (Some(height), Some(width)) => Dimension {
+                        height: height as u32,
+                        width: width as u32,
+                    },
+                    _ => continue,
+                };
+
+                *pixel_counts.entry(dimension).or_default() += 1;
+            }
+
+            pixel_counts.into_iter().for_each(|(dimension, count)| {
+                if dimension.height > height || dimension.width > width {
+                    return;
+                }
+
+                let color = if use_color {
+                    (count * color_scale).clamp(0, ImageDepth::MAX.try_into().unwrap())
+                        as ImageDepth
+                } else {
+                    0
+                };
+
+                let (x, y) = (dimension.width - 1, dimension.height - 1);
+                im.put_pixel(x, y, image::Rgb([0, color, 0]));
+            });
+
+            im.save(output).unwrap();
         }
     }
 
@@ -345,4 +429,10 @@ mod b64_vec {
         b64.map(|b64| base64::decode(b64).map_err(serde::de::Error::custom))
             .transpose()
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+struct Dimension {
+    height: u32,
+    width: u32,
 }
