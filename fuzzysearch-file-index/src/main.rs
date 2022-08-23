@@ -8,7 +8,7 @@ use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
 #[derive(Parser)]
 struct Config {
@@ -27,6 +27,17 @@ enum Command {
     IndexDirectory {
         /// Directory to watch for file changes.
         #[clap(env, index = 1)]
+        directory: String,
+    },
+
+    /// Import changed files, as determined by rsync log.
+    ImportChangedFiles {
+        /// FuzzySearch dump file path.
+        #[clap(env, index = 1)]
+        changes: String,
+
+        /// Directory to where files were downloaded.
+        #[clap(env, index = 2)]
         directory: String,
     },
 
@@ -60,6 +71,43 @@ async fn main() -> Result<()> {
             let (tx, rx) = tokio::sync::mpsc::channel(available_parallelism);
 
             tokio::task::spawn_blocking(move || discover_files(&directory, tx));
+
+            tokio_stream::wrappers::ReceiverStream::new(rx)
+                .chunks_timeout(100, Duration::from_secs(10))
+                .map(|chunk| tokio::task::spawn(process_chunk(pool.clone(), chunk)))
+                .buffer_unordered(available_parallelism)
+                .for_each(|_| async { () })
+                .await;
+        }
+
+        Command::ImportChangedFiles { changes, directory } => {
+            tracing::info!("indexing changed files from {} in {}", changes, directory);
+
+            let file = tokio::fs::File::open(changes).await?;
+
+            let (tx, rx) = tokio::sync::mpsc::channel(available_parallelism);
+
+            tokio::task::spawn(async move {
+                let mut lines = tokio::io::BufReader::new(file).lines();
+
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if !line.starts_with('>') {
+                        continue;
+                    }
+
+                    let (_prefix, file) = match line.split_once(' ') {
+                        Some(parts) => parts,
+                        None => continue,
+                    };
+
+                    tracing::trace!("found modified file: {}", file);
+
+                    let mut path = PathBuf::from(&directory);
+                    path.push(file);
+
+                    tx.send(path).await.unwrap();
+                }
+            });
 
             tokio_stream::wrappers::ReceiverStream::new(rx)
                 .chunks_timeout(100, Duration::from_secs(10))
