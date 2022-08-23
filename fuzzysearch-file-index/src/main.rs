@@ -5,6 +5,7 @@ use eyre::Result;
 use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 use image::GenericImageView;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::io::AsyncReadExt;
@@ -28,6 +29,13 @@ enum Command {
         #[clap(env, index = 1)]
         directory: String,
     },
+
+    /// Import known file associations from a FuzzySearch dump.
+    ImportAssociations {
+        /// FuzzySearch dump file path.
+        #[clap(env, index = 1)]
+        dump: String,
+    },
 }
 
 #[tokio::main]
@@ -43,19 +51,49 @@ async fn main() -> Result<()> {
     tracing::trace!("running database migrations");
     sqlx::migrate!().run(&pool).await?;
 
+    let available_parallelism: usize = std::thread::available_parallelism()?.into();
+
     match config.command {
         Command::IndexDirectory { directory } => {
             tracing::info!("indexing directory: {}", directory);
 
-            let (tx, rx) = tokio::sync::mpsc::channel(12);
+            let (tx, rx) = tokio::sync::mpsc::channel(available_parallelism);
 
             tokio::task::spawn_blocking(move || discover_files(&directory, tx));
 
             tokio_stream::wrappers::ReceiverStream::new(rx)
                 .chunks_timeout(100, Duration::from_secs(10))
                 .map(|chunk| tokio::task::spawn(process_chunk(pool.clone(), chunk)))
-                .buffer_unordered(std::thread::available_parallelism()?.into())
+                .buffer_unordered(available_parallelism)
                 .for_each(|_| async { () })
+                .await;
+        }
+
+        Command::ImportAssociations { dump } => {
+            tracing::info!("importing associations: {}", dump);
+
+            let (tx, rx) = tokio::sync::mpsc::channel(available_parallelism);
+
+            tokio::task::spawn_blocking(move || read_dump(PathBuf::from(dump), tx));
+
+            tokio_stream::wrappers::ReceiverStream::new(rx)
+                .for_each(move |item| {
+                    let pool = pool.clone();
+
+                    async move {
+                        if let Some(hash) = item.sha256 {
+                            let _res = sqlx::query_file!(
+                                "queries/insert_dump.sql",
+                                hash,
+                                item.site.id(),
+                                item.id.to_string(),
+                                item.posted_at
+                            )
+                            .execute(&pool)
+                            .await;
+                        }
+                    }
+                })
                 .await;
         }
     }
@@ -179,4 +217,56 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
         height,
         width,
     })
+}
+
+fn read_dump(path: PathBuf, tx: tokio::sync::mpsc::Sender<Item>) {
+    let f = std::fs::File::open(path).unwrap();
+
+    let mut rdr = csv::Reader::from_reader(f);
+    let files = rdr.deserialize::<Item>();
+
+    for file in files.filter_map(|f| f.ok()) {
+        tx.blocking_send(file).expect("could not send item");
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Site {
+    FurAffinity,
+    Weasyl,
+    E621,
+}
+
+impl Site {
+    fn id(&self) -> i32 {
+        match self {
+            Self::FurAffinity => 1,
+            Self::E621 => 2,
+            Self::Weasyl => 4,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct Item {
+    site: Site,
+    id: i64,
+    posted_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(with = "b64_vec")]
+    sha256: Option<Vec<u8>>,
+}
+
+mod b64_vec {
+    use serde::{Deserialize, Deserializer};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let b64: Option<String> = Deserialize::deserialize(deserializer)?;
+
+        b64.map(|b64| base64::decode(b64).map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }
