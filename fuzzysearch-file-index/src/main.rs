@@ -1,12 +1,11 @@
 use std::{collections::HashSet, path::PathBuf, time::Duration};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use eyre::Result;
 use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 use image::GenericImageView;
-use sha2::Digest;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::io::AsyncReadExt;
 
@@ -16,9 +15,19 @@ struct Config {
     #[clap(short = 'd', long, env)]
     database_url: String,
 
-    /// Directory to watch for file changes.
-    #[clap(env, index = 1)]
-    directory: String,
+    /// Which function to perform.
+    #[clap(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Index a directory by scanning for all unknown files.
+    IndexDirectory {
+        /// Directory to watch for file changes.
+        #[clap(env, index = 1)]
+        directory: String,
+    },
 }
 
 #[tokio::main]
@@ -34,16 +43,22 @@ async fn main() -> Result<()> {
     tracing::trace!("running database migrations");
     sqlx::migrate!().run(&pool).await?;
 
-    let (tx, rx) = tokio::sync::mpsc::channel(12);
+    match config.command {
+        Command::IndexDirectory { directory } => {
+            tracing::info!("indexing directory: {}", directory);
 
-    tokio::task::spawn_blocking(move || discover_files(&config.directory, tx));
+            let (tx, rx) = tokio::sync::mpsc::channel(12);
 
-    tokio_stream::wrappers::ReceiverStream::new(rx)
-        .chunks_timeout(100, Duration::from_secs(10))
-        .map(|chunk| tokio::task::spawn(process_chunk(pool.clone(), chunk)))
-        .buffer_unordered(std::thread::available_parallelism()?.into())
-        .for_each(|_| async { () })
-        .await;
+            tokio::task::spawn_blocking(move || discover_files(&directory, tx));
+
+            tokio_stream::wrappers::ReceiverStream::new(rx)
+                .chunks_timeout(100, Duration::from_secs(10))
+                .map(|chunk| tokio::task::spawn(process_chunk(pool.clone(), chunk)))
+                .buffer_unordered(std::thread::available_parallelism()?.into())
+                .for_each(|_| async { () })
+                .await;
+        }
+    }
 
     Ok(())
 }
