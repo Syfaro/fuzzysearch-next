@@ -302,7 +302,13 @@ async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<Vec<Fi
         }
     }
 
-    tracing::debug!(count = files.len(), "discovered new files");
+    let count = files.len();
+
+    if count == 0 {
+        tracing::trace!("no new files discovered");
+    } else {
+        tracing::debug!(count = files.len(), "discovered new files");
+    }
 
     Ok(files)
 }
@@ -335,7 +341,7 @@ async fn process_files(
             let count = files.len();
 
             tracing::trace!(
-                "adding new files: {:?}",
+                "inserting new files: {:?}",
                 files
                     .iter()
                     .map(|file| hex::encode(&file.hash))
