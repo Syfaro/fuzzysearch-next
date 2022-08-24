@@ -101,15 +101,8 @@ async fn main() -> Result<()> {
             tracing::info!("indexing directory: {}", directory);
 
             let (tx, rx) = tokio::sync::mpsc::channel(available_parallelism);
-
             tokio::task::spawn_blocking(move || discover_files(&directory, tx));
-
-            tokio_stream::wrappers::ReceiverStream::new(rx)
-                .chunks_timeout(100, Duration::from_secs(10))
-                .map(|chunk| tokio::task::spawn(process_chunk(pool.clone(), chunk)))
-                .buffer_unordered(available_parallelism)
-                .for_each(|_| async {})
-                .await;
+            process_files(pool, rx, available_parallelism).await;
         }
 
         Command::ImportChangedFiles { changes, directory } => {
@@ -141,12 +134,7 @@ async fn main() -> Result<()> {
                 }
             });
 
-            tokio_stream::wrappers::ReceiverStream::new(rx)
-                .chunks_timeout(100, Duration::from_secs(10))
-                .map(|chunk| tokio::task::spawn(process_chunk(pool.clone(), chunk)))
-                .buffer_unordered(available_parallelism)
-                .for_each(|_| async {})
-                .await;
+            process_files(pool, rx, available_parallelism).await;
         }
 
         Command::ImportAssociations { dump } => {
@@ -263,7 +251,16 @@ struct File {
     mime_type: Option<String>,
 }
 
-async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<()> {
+#[derive(Debug, Serialize)]
+struct DbFile {
+    hash: String,
+    size: i32,
+    height: Option<i32>,
+    width: Option<i32>,
+    mime_type: Option<String>,
+}
+
+async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<Vec<File>> {
     let decoded_paths: Vec<_> = paths
         .into_iter()
         .filter_map(|path| {
@@ -305,33 +302,80 @@ async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<()> {
         }
     }
 
-    if files.is_empty() {
-        tracing::debug!("no new files were found");
-        return Ok(());
-    }
+    tracing::debug!(count = files.len(), "discovered new files");
 
-    let count = files.len();
+    Ok(files)
+}
 
-    let mut tx = pool.begin().await?;
+async fn process_files(
+    pool: PgPool,
+    rx: tokio::sync::mpsc::Receiver<PathBuf>,
+    available_parallelism: usize,
+) {
+    tokio_stream::wrappers::ReceiverStream::new(rx)
+        .chunks_timeout(100, Duration::from_secs(10))
+        .map(|chunk| tokio::task::spawn(process_chunk(pool.clone(), chunk)))
+        .buffer_unordered(available_parallelism)
+        .filter_map(|chunk| async {
+            match chunk {
+                Err(err) => {
+                    tracing::error!("spawn error: {}", err);
+                    None
+                }
+                Ok(Err(err)) => {
+                    tracing::error!("chunk error: {}", err);
+                    None
+                }
+                Ok(Ok(files)) => Some(futures::stream::iter(files)),
+            }
+        })
+        .flatten()
+        .chunks_timeout(100, Duration::from_secs(10))
+        .for_each(|files| async {
+            let count = files.len();
 
-    for file in files {
-        sqlx::query_file!(
-            "queries/insert_hash.sql",
-            file.hash,
-            file.size,
-            file.height,
-            file.width,
-            file.mime_type
-        )
-        .execute(&mut tx)
-        .await?;
-    }
+            tracing::trace!(
+                "adding new files: {:?}",
+                files
+                    .iter()
+                    .map(|file| hex::encode(&file.hash))
+                    .collect::<Vec<_>>()
+            );
 
-    tx.commit().await?;
+            // Somehow, duplicate values can make it through. Collect to a
+            // HashMap and then back to a Vec to ensure uniqueness.
+            let values = files
+                .into_iter()
+                .map(|file| {
+                    let hex_str = hex::encode(&file.hash);
 
-    tracing::info!(count, "added new files");
+                    (
+                        file.hash,
+                        DbFile {
+                            hash: hex_str,
+                            size: file.size,
+                            height: file.height,
+                            width: file.width,
+                            mime_type: file.mime_type,
+                        },
+                    )
+                })
+                .collect::<HashMap<Vec<u8>, DbFile>>()
+                .into_iter()
+                .map(|(_hash, file)| file)
+                .collect::<Vec<_>>();
 
-    Ok(())
+            let value = serde_json::to_value(values).unwrap();
+
+            let rows_affected = sqlx::query_file!("queries/insert_hash.sql", value)
+                .execute(&pool)
+                .await
+                .unwrap()
+                .rows_affected();
+
+            tracing::info!(count, rows_affected, "inserted new files");
+        })
+        .await;
 }
 
 async fn evaluate_file(path: PathBuf) -> Result<File> {
