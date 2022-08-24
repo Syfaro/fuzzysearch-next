@@ -267,8 +267,10 @@ async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<()> {
     let decoded_paths: Vec<_> = paths
         .into_iter()
         .filter_map(|path| {
-            let last_segment = path.to_string_lossy().split('/').last()?.to_owned();
-            let decoded = hex::decode(last_segment).ok()?;
+            let path_str = path.to_string_lossy();
+            let last = path_str.split('/').last()?;
+
+            let decoded = hex::decode(last).ok()?;
 
             // all valid files are sha256 hashes
             if decoded.len() != 32 {
@@ -343,11 +345,14 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
     let digest = Sha256::digest(&contents);
     let mime_type = infer::get(&contents).map(|inf| inf.mime_type().to_string());
 
-    let (width, height) = image::load_from_memory(&contents)
-        .ok()
-        .map(|im| im.dimensions())
-        .map(|dim| (Some(dim.0 as i32), Some(dim.1 as i32)))
-        .unwrap_or_default();
+    let (width, height) = std::panic::catch_unwind(|| {
+        image::load_from_memory(&contents)
+            .ok()
+            .map(|im| im.dimensions())
+            .map(|dim| (Some(dim.0 as i32), Some(dim.1 as i32)))
+            .unwrap_or_default()
+    })
+    .map_err(|_err| eyre::eyre!("decoding image panicked"))?;
 
     Ok(File {
         hash: digest.to_vec(),
