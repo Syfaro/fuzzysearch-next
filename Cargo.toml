@@ -1,4 +1,5 @@
 [workspace]
 members = [
+    "fuzzysearch-api",
     "fuzzysearch-file-index"
 ]
