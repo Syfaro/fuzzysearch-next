@@ -53,6 +53,7 @@ impl Modify for ApiTokenAddon {
     }
 }
 
+/// A service that FuzzySearch supports.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Service {
@@ -67,6 +68,7 @@ impl std::fmt::Display for Service {
     }
 }
 
+/// The rating of a given submission.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Rating {
@@ -90,6 +92,7 @@ impl std::str::FromStr for Rating {
     }
 }
 
+/// An image upload.
 #[allow(dead_code)]
 #[derive(ToSchema)]
 struct Image {
@@ -97,41 +100,64 @@ struct Image {
     image: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+/// Site-specific information.
+#[derive(Default, Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "site", content = "site_info")]
 pub enum SiteInfo {
     FurAffinity {
+        /// The file ID on FurAffinity. Note that this is not the same as the submission ID.
         file_id: i32,
     },
     #[serde(rename = "e621")]
     E621 {
+        /// The sources attached to this post.
         sources: Vec<String>,
     },
     Twitter,
     Weasyl,
+    #[default]
+    Unknown,
 }
 
+/// An image search result.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
 pub struct SearchResult {
+    /// The ID of the submission on the site.
     pub site_id: i64,
+    /// The ID of the submission on the site, as a string.
     pub site_id_str: String,
+    /// The URL of the image.
     pub url: String,
+    /// The name of the file.
     pub filename: String,
+    /// The artists associated with the image.
     pub artists: Option<Vec<String>>,
+    /// The rating of the image.
     pub rating: Option<Rating>,
+    /// When the image was posted, if known.
     pub posted_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// A SHA256 of the contents of the image, if known.
     pub sha256: Option<String>,
 
+    /// The hash of the image.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hash: Option<i64>,
+    /// The hash of the image, as a string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hash_str: Option<String>,
+    /// The distance between the searched hash and the hash of this image.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distance: Option<i64>,
+    /// The searched hash.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub searched_hash: Option<i64>,
+    /// The searched hash, as a string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub searched_hash_str: Option<String>,
+
+    /// Site-specific information.
+    #[serde(flatten)]
+    pub site_info: SiteInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -167,9 +193,11 @@ macro_rules! rate_limit {
 
 #[derive(Debug, Serialize, Deserialize, IntoParams)]
 pub struct HandleQuery {
+    /// The handle to search for, case-insensitive.
     handle: String,
 }
 
+/// Check if a handle is being indexed for a given service.
 #[utoipa::path(
     get,
     path = "/handle/{service}",
@@ -199,9 +227,11 @@ pub async fn check_handle(
 
 #[derive(Debug, Serialize, Deserialize, IntoParams)]
 pub struct HashesQuery {
+    /// Hashes to search for, comma separated.
     hash: String,
 }
 
+/// Search for images by hashes.
 #[utoipa::path(
     get,
     path = "/hashes",
@@ -248,6 +278,7 @@ enum ImageError {
     TooLarge,
 }
 
+/// Search for images by image upload.
 #[utoipa::path(
     post,
     path = "/image",
@@ -328,6 +359,7 @@ enum UrlError {
     Unavailable,
 }
 
+/// Search for images by image available at URL.
 #[utoipa::path(
     get,
     path = "/url",
@@ -418,9 +450,11 @@ pub async fn search_image_by_url(
 
 #[derive(Debug, Serialize, Deserialize, IntoParams)]
 pub struct FurAffinityFileQuery {
+    /// The search query. IDs, URLs, and filenames are accepted.
     pub search: String,
 }
 
+/// Get information about a file on FurAffinity.
 #[utoipa::path(
     get,
     path = "/file/furaffinity",
