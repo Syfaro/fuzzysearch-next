@@ -1,5 +1,7 @@
+use async_compression::tokio::write::GzipEncoder;
 use clap::Parser;
 use serde::Serialize;
+use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 
 #[derive(Clone, Debug, Serialize)]
@@ -50,6 +52,18 @@ mod b64_vec {
 struct Config {
     #[clap(long, env)]
     database_url: String,
+
+    #[clap(long, env)]
+    s3_endpoint: String,
+    #[clap(long, env)]
+    s3_region: String,
+    #[clap(long, env)]
+    s3_key: String,
+    #[clap(long, env)]
+    s3_secret: String,
+
+    #[clap(long, env)]
+    s3_bucket: String,
 }
 
 #[tokio::main]
@@ -67,10 +81,11 @@ async fn main() {
 
     tracing::info!("creating export file");
 
-    let file = tokio::fs::File::create("fuzzysearch-dump.csv")
+    let file = tokio::fs::File::create("fuzzysearch-dump.csv.gz")
         .await
         .expect("could not create output file");
-    let mut dump = csv_async::AsyncSerializer::from_writer(file);
+    let compressor = GzipEncoder::new(file);
+    let mut dump = csv_async::AsyncSerializer::from_writer(compressor);
 
     let estimated_count = sqlx::query_file_scalar!("queries/estimate_rows.sql")
         .fetch_one(&pool)
@@ -175,7 +190,60 @@ async fn main() {
         pb.inc(1);
     }
 
+    let mut compressor = dump.into_inner().await.unwrap();
+    compressor.shutdown().await.unwrap();
+
+    let mut file = compressor.into_inner();
+    file.flush().await.unwrap();
+
     pb.abandon_with_message("Completed Export");
+
+    tracing::info!("starting upload");
+
+    let bucket = s3::Bucket::new(
+        &config.s3_bucket,
+        s3::Region::Custom {
+            region: config.s3_region,
+            endpoint: config.s3_endpoint.clone(),
+        },
+        s3::creds::Credentials::new(
+            Some(&config.s3_key),
+            Some(&config.s3_secret),
+            None,
+            None,
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap()
+    .with_path_style();
+
+    let mut dump_file = tokio::fs::File::open("fuzzysearch-dump.csv.gz")
+        .await
+        .unwrap();
+
+    let object_path = format!(
+        "fuzzysearch-dump-{}.csv.gz",
+        chrono::Utc::now().format("%Y%m%d")
+    );
+
+    bucket
+        .put_object_stream(&mut dump_file, &object_path)
+        .await
+        .unwrap();
+
+    tracing::info!("inserting row");
+
+    sqlx::query_file!(
+        "queries/insert_dump.sql",
+        format!(
+            "{}/{}/{}",
+            config.s3_endpoint, config.s3_bucket, object_path
+        )
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     tracing::info!("completed");
 }

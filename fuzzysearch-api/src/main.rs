@@ -66,6 +66,7 @@ async fn main() -> eyre::Result<()> {
     let api = Router::new()
         .merge(authenticated_api)
         .route("/handle/:service", routing::get(api::check_handle))
+        .route("/dump/latest", routing::get(api::dump_latest))
         .layer(api_layer);
 
     let app_layer = ServiceBuilder::new()

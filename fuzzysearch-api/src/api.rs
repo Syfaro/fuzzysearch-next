@@ -31,6 +31,7 @@ use crate::{
         search_image_by_url,
         check_handle,
         lookup_furaffinity_file,
+        dump_latest,
     ),
     components(
         schemas(Service, UrlError, SearchResult, Rating, SiteInfo, Image, ImageError, FurAffinityFile)
@@ -392,4 +393,21 @@ pub async fn lookup_furaffinity_file(
     let results: Vec<FurAffinityFile> = results.into_iter().map(From::from).collect();
 
     Ok((StatusCode::OK, headers, Json(results)).into_response())
+}
+
+#[utoipa::path(
+    get,
+    path = "/dump/latest",
+    responses(
+        (status = 200, description = "File lookup completed successfully", body = String),
+    ),
+)]
+pub async fn dump_latest(
+    Extension(pool): Extension<PgPool>,
+) -> Result<impl IntoResponse, ReportError> {
+    let url = sqlx::query_file_scalar!("queries/latest_dump.sql")
+        .fetch_one(&pool)
+        .await?;
+
+    Ok(url)
 }
