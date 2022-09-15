@@ -1,0 +1,14 @@
+[package]
+name = "fuzzysearch-common"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Syfaro <syfaro@huefox.com>"]
+
+[features]
+"api-types" = ["utoipa"]
+
+[dependencies]
+serde = { version = "1.0.144", features = ["derive"] }
+chrono = { version = "0.4.22", features = ["serde"] }
+utoipa = { version = "2.0.1", optional = true }

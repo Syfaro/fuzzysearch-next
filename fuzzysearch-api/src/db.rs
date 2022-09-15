@@ -11,7 +11,7 @@ use reqwest::header::HeaderName;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-use crate::api;
+use fuzzysearch_common::*;
 
 #[derive(Clone)]
 pub struct UserApiKey {
@@ -203,9 +203,9 @@ impl DbFurAffinityFile {
     }
 }
 
-impl From<DbFurAffinityFile> for api::FurAffinityFile {
+impl From<DbFurAffinityFile> for FurAffinityFile {
     fn from(file: DbFurAffinityFile) -> Self {
-        api::FurAffinityFile {
+        FurAffinityFile {
             id: file.id,
             file_id: file.file_id,
             artist: file.artist,
@@ -248,7 +248,7 @@ struct DbResult {
     sha256: Option<Vec<u8>>,
 }
 
-impl From<DbResult> for api::SearchResult {
+impl From<DbResult> for SearchResult {
     fn from(result: DbResult) -> Self {
         Self {
             site_id: result.id,
@@ -265,15 +265,15 @@ impl From<DbResult> for api::SearchResult {
             searched_hash: Some(result.searched_hash),
             searched_hash_str: Some(result.searched_hash.to_string()),
             site_info: match result.site.as_ref() {
-                "FurAffinity" => api::SiteInfo::FurAffinity {
+                "FurAffinity" => SiteInfo::FurAffinity {
                     file_id: result.file_id.unwrap_or_default(),
                 },
-                "e621" => api::SiteInfo::E621 {
+                "e621" => SiteInfo::E621 {
                     sources: result.sources.unwrap_or_default(),
                 },
-                "Weasyl" => api::SiteInfo::Weasyl,
-                "Twitter" => api::SiteInfo::Twitter,
-                _ => api::SiteInfo::Unknown,
+                "Weasyl" => SiteInfo::Weasyl,
+                "Twitter" => SiteInfo::Twitter,
+                _ => SiteInfo::Unknown,
             },
         }
     }
@@ -284,7 +284,7 @@ pub async fn lookup_hashes(
     pool: &PgPool,
     hashes: &[i64],
     distance: u64,
-) -> eyre::Result<Vec<api::SearchResult>> {
+) -> eyre::Result<Vec<SearchResult>> {
     tracing::debug!(distance, "starting lookup for hashes: {:?}", hashes);
 
     let related_hashes = bkapi.search_many(hashes, distance).await?;
@@ -309,7 +309,7 @@ pub async fn lookup_hashes(
         "queries/lookup_hashes.sql",
         serde_json::to_value(search)?
     )
-    .map(api::SearchResult::from)
+    .map(SearchResult::from)
     .fetch_all(pool)
     .await?;
     tracing::trace!(count = results.len(), "found hashes");
@@ -320,25 +320,22 @@ pub async fn lookup_hashes(
 pub async fn lookup_furaffinity_file(
     pool: &PgPool,
     file: &str,
-) -> eyre::Result<Vec<api::FurAffinityFile>> {
+) -> eyre::Result<Vec<FurAffinityFile>> {
     let results = sqlx::query_file_as!(
         DbFurAffinityFile,
         "queries/lookup_furaffinity_filename.sql",
         file
     )
-    .map(api::FurAffinityFile::from)
+    .map(FurAffinityFile::from)
     .fetch_all(pool)
     .await?;
 
     Ok(results)
 }
 
-pub async fn lookup_furaffinity_id(
-    pool: &PgPool,
-    id: i32,
-) -> eyre::Result<Vec<api::FurAffinityFile>> {
+pub async fn lookup_furaffinity_id(pool: &PgPool, id: i32) -> eyre::Result<Vec<FurAffinityFile>> {
     let results = sqlx::query_file_as!(DbFurAffinityFile, "queries/lookup_furaffinity_id.sql", id)
-        .map(api::FurAffinityFile::from)
+        .map(FurAffinityFile::from)
         .fetch_all(pool)
         .await?;
 

@@ -30,3 +30,5 @@ tracing-subscriber = "0.3.15"
 utoipa = { version = "2", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "2", features = ["axum"] }
 url = "2.2.2"
+
+fuzzysearch-common = { path = "../fuzzysearch-common", features = ["api-types"] }
