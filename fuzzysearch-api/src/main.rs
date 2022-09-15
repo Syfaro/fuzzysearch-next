@@ -81,7 +81,7 @@ async fn main() -> eyre::Result<()> {
         .merge(api)
         .layer(app_layer);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!("starting on {}", addr);
 
     Server::bind(&addr).serve(app.into_make_service()).await?;

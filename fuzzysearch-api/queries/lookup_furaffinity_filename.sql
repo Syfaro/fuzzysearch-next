@@ -11,15 +11,17 @@ SELECT
     submission.file_sha256 "sha256",
     submission.updated_at,
     submission.deleted,
-    tags.tags "tags"
-FROM submission
-LEFT JOIN artist
-    ON artist.id = submission.artist_id
-LEFT JOIN (
-	SELECT tag_to_post.post_id, array_agg(tag.name) tags
-	FROM tag_to_post
-	JOIN tag ON tag.id = tag_to_post.tag_id
-	GROUP BY (tag_to_post.post_id)
-) tags
-    ON tags.post_id = submission.id
-WHERE submission.filename = $1;
+    ARRAY(
+        SELECT
+            tag.name
+        FROM
+            tag_to_post
+            JOIN tag ON tag.id = tag_to_post.tag_id
+        WHERE
+            tag_to_post.post_id = submission.id
+    ) tags
+FROM
+    submission
+    LEFT JOIN artist ON artist.id = submission.artist_id
+WHERE
+    lower(submission.filename) = lower($1);
