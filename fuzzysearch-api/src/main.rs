@@ -31,7 +31,7 @@ struct Config {
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    let _ = dotenv::dotenv();
+    let _ = dotenvy::dotenv();
     tracing_subscriber::fmt::init();
 
     let config = Config::parse();

@@ -3,5 +3,6 @@ members = [
     "fuzzysearch-common",
     "fuzzysearch-api",
     "fuzzysearch-file-index",
+    "fuzzysearch-dump",
     "fuzzysearch-web"
 ]

@@ -11,7 +11,7 @@ bkapi-client = { git = "https://github.com/Syfaro/bkapi.git" }
 bytes = "1.2.1"
 chrono = { version = "0.4.22", features = ["serde"] }
 clap = { version = "3.2.20", features = ["derive", "env"] }
-dotenv = "0.15.0"
+dotenvy = "0.15.3"
 eyre = "0.6.8"
 hex = "0.4.3"
 image = "0.23.14"
