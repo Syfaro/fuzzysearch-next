@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
+    pin::Pin,
     time::Duration,
 };
 
@@ -12,7 +13,7 @@ use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt};
 
 #[derive(Debug, Parser)]
 struct Config {
@@ -108,12 +109,17 @@ async fn main() -> Result<()> {
         Command::ImportChangedFiles { changes, directory } => {
             tracing::info!("indexing changed files from {} in {}", changes, directory);
 
-            let file = tokio::fs::File::open(changes).await?;
+            type ChangeSource = Pin<Box<dyn AsyncRead + Send>>;
+            let change_source = if changes == "-" {
+                Box::pin(tokio::io::stdin()) as ChangeSource
+            } else {
+                Box::pin(tokio::fs::File::open(changes).await?) as ChangeSource
+            };
 
             let (tx, rx) = tokio::sync::mpsc::channel(available_parallelism);
 
             tokio::task::spawn(async move {
-                let mut lines = tokio::io::BufReader::new(file).lines();
+                let mut lines = tokio::io::BufReader::new(change_source).lines();
 
                 while let Ok(Some(line)) = lines.next_line().await {
                     if !line.starts_with('>') {
