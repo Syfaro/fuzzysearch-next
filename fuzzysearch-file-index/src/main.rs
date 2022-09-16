@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt};
 
+const METADATA_VERSION: i32 = 2;
+
 #[derive(Debug, Parser)]
 struct Config {
     /// PostgreSQL database URL.
@@ -255,6 +257,7 @@ struct File {
     height: Option<i32>,
     width: Option<i32>,
     mime_type: Option<String>,
+    exif_entries: Option<Vec<ExifEntry>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,6 +267,8 @@ struct DbFile {
     height: Option<i32>,
     width: Option<i32>,
     mime_type: Option<String>,
+    metadata_version: i32,
+    exif_entries: Option<serde_json::Value>,
 }
 
 async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<Vec<File>> {
@@ -291,12 +296,15 @@ async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<Vec<Fi
         .map(|(_path, hash)| hash.clone())
         .collect();
 
-    let existing_hashes: HashSet<Vec<u8>> =
-        sqlx::query_file_scalar!("queries/existing_hashes.sql", &discovered_hashes)
-            .fetch_all(&pool)
-            .await?
-            .into_iter()
-            .collect();
+    let existing_hashes: HashSet<Vec<u8>> = sqlx::query_file_scalar!(
+        "queries/existing_hashes.sql",
+        METADATA_VERSION,
+        &discovered_hashes
+    )
+    .fetch_all(&pool)
+    .await?
+    .into_iter()
+    .collect();
 
     for (path, hash) in decoded_paths
         .into_iter()
@@ -368,6 +376,10 @@ async fn process_files(
                             height: file.height,
                             width: file.width,
                             mime_type: file.mime_type,
+                            metadata_version: METADATA_VERSION,
+                            exif_entries: file
+                                .exif_entries
+                                .and_then(|entries| serde_json::to_value(entries).ok()),
                         },
                     )
                 })
@@ -389,13 +401,20 @@ async fn process_files(
         .await;
 }
 
+#[derive(Debug, Serialize)]
+struct ExifEntry {
+    tag_number: u16,
+    tag_description: Option<String>,
+    display_value: String,
+}
+
 async fn evaluate_file(path: PathBuf) -> Result<File> {
     tracing::trace!("evaluating {}", path.to_string_lossy());
 
     let mut file = tokio::fs::File::open(&path).await?;
 
     let mut contents = Vec::with_capacity(2_000_000);
-    let mut _read = file.read_to_end(&mut contents).await?;
+    let read = file.read_to_end(&mut contents).await?;
 
     let digest = Sha256::digest(&contents);
     let mime_type = infer::get(&contents).map(|inf| inf.mime_type().to_string());
@@ -409,12 +428,32 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
     })
     .map_err(|_err| eyre::eyre!("decoding image panicked"))?;
 
+    let exif_entries: Option<Vec<_>> = tokio::task::spawn_blocking(move || {
+        let mut file = std::io::BufReader::new(std::fs::File::open(&path).unwrap());
+
+        exif::Reader::new()
+            .read_from_container(&mut file)
+            .map(|exif| {
+                exif.fields()
+                    .into_iter()
+                    .map(|field| ExifEntry {
+                        tag_number: field.tag.number(),
+                        tag_description: field.tag.description().map(ToString::to_string),
+                        display_value: field.display_value().to_string(),
+                    })
+                    .collect()
+            })
+            .ok()
+    })
+    .await?;
+
     Ok(File {
         hash: digest.to_vec(),
-        size: contents.len() as i32,
+        size: read as i32,
         mime_type,
         height,
         width,
+        exif_entries,
     })
 }
 

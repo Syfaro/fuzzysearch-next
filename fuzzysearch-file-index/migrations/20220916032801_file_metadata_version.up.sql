@@ -1,0 +1,4 @@
+ALTER TABLE
+    file
+ADD
+    COLUMN metadata_version INTEGER NOT NULL DEFAULT 1;

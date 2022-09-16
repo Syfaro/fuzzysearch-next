@@ -1,1 +1,7 @@
-SELECT hash FROM file WHERE hash = any($1);
+SELECT
+    hash
+FROM
+    file
+WHERE
+    metadata_version >= $1
+    AND hash = any($2);
