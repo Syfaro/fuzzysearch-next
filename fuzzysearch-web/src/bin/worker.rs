@@ -1,7 +1,7 @@
 use yew_agent::PublicWorker;
 
-use fuzzysearch_web::Worker;
+use fuzzysearch_web::workers::ImageHasherWorker;
 
 fn main() {
-    Worker::register();
+    ImageHasherWorker::register();
 }

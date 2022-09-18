@@ -53,7 +53,7 @@ pub struct Image {
 }
 
 /// Site-specific information.
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
 #[serde(tag = "site", content = "site_info")]
 pub enum SiteInfo {
@@ -73,7 +73,7 @@ pub enum SiteInfo {
 }
 
 /// An image search result.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
 pub struct SearchResult {
     /// The ID of the submission on the site.

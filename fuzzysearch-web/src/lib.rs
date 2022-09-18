@@ -1,189 +1,16 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
-use gloo::file::{callbacks::FileReader, File};
-use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{FileList, HtmlInputElement, Request, RequestInit, RequestMode, Response};
+use web_sys::{Request, RequestInit, RequestMode, Response};
 use yew::{platform::spawn_local, prelude::*};
-use yew_agent::{use_bridge, Public, UseBridgeHandle, WorkerLink};
+use yew_agent::{use_bridge, UseBridgeHandle};
 
-#[derive(Serialize, Deserialize)]
-pub struct WorkerInput {
-    pub contents: Vec<u8>,
-}
+use crate::components::{file_uploader::FileUploader, search_results::SearchResults};
+use crate::workers::{ImageHasherWorker, ImageHasherWorkerInput, ImageHasherWorkerOutput};
 
-#[derive(Serialize, Deserialize)]
-pub enum WorkerOutput {
-    Starting,
-    Finished { hash: Option<i64> },
-}
-
-pub struct Worker {
-    link: WorkerLink<Self>,
-}
-
-impl yew_agent::Worker for Worker {
-    type Input = WorkerInput;
-    type Message = ();
-    type Output = WorkerOutput;
-    type Reach = Public<Self>;
-
-    fn create(link: WorkerLink<Self>) -> Self {
-        Self { link }
-    }
-
-    fn update(&mut self, _msg: Self::Message) {}
-
-    fn handle_input(&mut self, msg: Self::Input, id: yew_agent::HandlerId) {
-        tracing::trace!("received input for hashing");
-
-        self.link.respond(id, WorkerOutput::Starting);
-
-        let hash = image::load_from_memory(&msg.contents)
-            .ok()
-            .map(|im| Self::get_hasher().hash_image(&im))
-            .and_then(|hash| hash.as_bytes().try_into().ok())
-            .map(|hash| i64::from_be_bytes(hash));
-
-        tracing::debug!("finished hashing image");
-
-        self.link.respond(id, WorkerOutput::Finished { hash });
-    }
-
-    fn name_of_resource() -> &'static str {
-        "worker.js"
-    }
-}
-
-impl Worker {
-    fn get_hasher() -> img_hash::Hasher<[u8; 8]> {
-        use img_hash::HashAlg;
-
-        img_hash::HasherConfig::with_bytes_type::<[u8; 8]>()
-            .hash_alg(HashAlg::Gradient)
-            .hash_size(8, 8)
-            .preproc_dct()
-            .to_hasher()
-    }
-}
-
-pub struct FileUploader {
-    readers: HashMap<String, FileReader>,
-}
-
-pub enum FileUploaderMsg {
-    Files(Vec<File>),
-    Loaded(String, String, Option<Vec<u8>>),
-}
-
-#[derive(Properties, PartialEq)]
-pub struct FileUploaderProps {
-    pub on_file_upload: Callback<Vec<u8>>,
-}
-
-impl Component for FileUploader {
-    type Message = FileUploaderMsg;
-    type Properties = FileUploaderProps;
-
-    fn create(_ctx: &Context<Self>) -> Self {
-        Self {
-            readers: Default::default(),
-        }
-    }
-
-    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
-        match msg {
-            FileUploaderMsg::Files(files) => {
-                tracing::debug!("got {} files", files.len());
-                for file in files {
-                    let file_name = file.name();
-                    let mime_type = file.raw_mime_type();
-
-                    let task = {
-                        let link = ctx.link().clone();
-                        let file_name = file_name.clone();
-
-                        gloo::file::callbacks::read_as_bytes(&file, move |res| {
-                            link.send_message(FileUploaderMsg::Loaded(
-                                file_name,
-                                mime_type,
-                                res.ok(),
-                            ))
-                        })
-                    };
-                    self.readers.insert(file_name, task);
-                }
-
-                false
-            }
-            FileUploaderMsg::Loaded(name, mime, contents) => {
-                tracing::info!(mime_type = mime, "loaded file {name}");
-                if let Some(contents) = contents {
-                    ctx.props().on_file_upload.emit(contents);
-                }
-
-                true
-            }
-        }
-    }
-
-    fn view(&self, ctx: &Context<Self>) -> Html {
-        html! {
-            <div
-                ondrop={ctx.link().callback(|event: DragEvent| {
-                    event.prevent_default();
-                    let files = event.data_transfer().map(|dt| dt.files()).unwrap_or_default();
-                    Self::upload_files(files)
-                })}
-                ondragover={Callback::from(|event: DragEvent| {
-                    event.prevent_default();
-                })}
-                ondragenter={Callback::from(|event: DragEvent| {
-                    event.prevent_default();
-                })}
-            >
-                <input
-                    id="file-upload"
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onchange={ctx.link().callback(move |e: Event| {
-                        let input: HtmlInputElement = e.target_unchecked_into();
-                        Self::upload_files(input.files())
-                    })} />
-            </div>
-        }
-    }
-}
-
-impl FileUploader {
-    fn upload_files(files: Option<FileList>) -> FileUploaderMsg {
-        let mut results = Vec::with_capacity(
-            files
-                .as_ref()
-                .map(|files| files.length())
-                .unwrap_or_default() as usize,
-        );
-
-        if let Some(files) = files {
-            let files: Vec<File> = js_sys::try_iter(&files)
-                .ok()
-                .flatten()
-                .map(|files| {
-                    files
-                        .filter_map(|file| file.ok())
-                        .map(|file| web_sys::File::from(file))
-                        .map(From::from)
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            results.extend(files);
-        }
-
-        FileUploaderMsg::Files(results)
-    }
-}
+pub mod components;
+pub mod workers;
 
 pub struct FuzzySearchApi {
     api_token: String,
@@ -228,9 +55,23 @@ impl FuzzySearchApi {
     }
 }
 
-#[derive(Properties, PartialEq)]
+#[derive(Properties, PartialEq, Eq)]
 pub struct AppProps {
     pub fuzzysearch_api_token: String,
+}
+
+enum AppError {
+    InvalidImage,
+    Api,
+}
+
+impl AppError {
+    fn message(&self) -> &'static str {
+        match self {
+            Self::InvalidImage => "Image was not understood",
+            Self::Api => "Image lookup error",
+        }
+    }
 }
 
 enum AppAction {
@@ -242,7 +83,7 @@ enum AppAction {
         results: Vec<fuzzysearch_common::SearchResult>,
     },
     EncounteredError {
-        message: String,
+        error: AppError,
     },
 }
 
@@ -256,23 +97,13 @@ enum AppState {
         results: Rc<Vec<fuzzysearch_common::SearchResult>>,
     },
     Error {
-        message: String,
+        error: AppError,
     },
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self::Waiting
-    }
-}
-
-impl AppState {
-    fn is_loading(&self) -> Option<&'static str> {
-        if matches!(self, AppState::Hashing | AppState::Searching { .. }) {
-            Some("true")
-        } else {
-            None
-        }
     }
 }
 
@@ -286,7 +117,7 @@ impl Reducible for AppState {
             AppAction::GotMatches { results } => AppState::Results {
                 results: Rc::new(results),
             },
-            AppAction::EncounteredError { message } => AppState::Error { message },
+            AppAction::EncounteredError { error } => AppState::Error { error },
         };
 
         next_state.into()
@@ -297,13 +128,13 @@ impl Reducible for AppState {
 pub fn App(props: &AppProps) -> Html {
     let state = use_reducer(AppState::default);
 
-    let bridge: UseBridgeHandle<Worker> = {
+    let bridge: UseBridgeHandle<ImageHasherWorker> = {
         let state = state.clone();
         let api_token = props.fuzzysearch_api_token.clone();
 
-        use_bridge(move |response: WorkerOutput| match response {
-            WorkerOutput::Starting => state.dispatch(AppAction::StartedHashing),
-            WorkerOutput::Finished { hash: Some(hash) } => {
+        use_bridge(move |response: ImageHasherWorkerOutput| match response {
+            ImageHasherWorkerOutput::Starting => state.dispatch(AppAction::StartedHashing),
+            ImageHasherWorkerOutput::Finished { hash: Some(hash) } => {
                 state.dispatch(AppAction::FinishedHashing { hash });
 
                 let state = state.clone();
@@ -315,108 +146,80 @@ pub fn App(props: &AppProps) -> Html {
                     match fuzzysearch_api.search_hash(hash).await {
                         Some(results) => state.dispatch(AppAction::GotMatches { results }),
                         None => state.dispatch(AppAction::EncounteredError {
-                            message: "could not get results".to_string(),
+                            error: AppError::Api,
                         }),
                     }
                 });
             }
-            WorkerOutput::Finished { hash: None } => state.dispatch(AppAction::EncounteredError {
-                message: "could not hash image".to_string(),
-            }),
+            ImageHasherWorkerOutput::Finished { hash: None } => {
+                state.dispatch(AppAction::EncounteredError {
+                    error: AppError::InvalidImage,
+                })
+            }
         })
     };
 
     let on_file_upload: Callback<Vec<u8>> = Callback::from(move |contents: Vec<u8>| {
-        bridge.send(WorkerInput { contents });
+        bridge.send(ImageHasherWorkerInput { contents });
     });
 
     html! {
         <main class="container">
-            <h1>{ "FuzzySearch" }</h1>
+            <div class="sidebar">
+                <h1 class="title">{ "FuzzySearch" }</h1>
+                <h2 class="tagline">{ "Search images on FurAffinity, Weasyl, e621, and Twitter" }</h2>
 
-            <form>
-                <label for="file-upload">{ "Image upload" }</label>
-                <FileUploader on_file_upload={on_file_upload} />
-            </form>
+                <form>
+                    <FileUploader on_file_upload={on_file_upload} />
+                </form>
 
-            <div>
+                <div class="about">
+                    <p class="bot-links">
+                        { "Want to integrate this service in your chats? Check out FoxBot for " }
+                        <a href="https://t.me">{ "Telegram" }</a>
+                        { " and " }
+                        <a href="https://discord.com/oauth2/authorize?client_id=824071620783243336&scope=applications.commands">{ "Discord" }</a>
+                        { "!" }
+                    </p>
+
+                    <p class="credit">{ "FuzzySearch is a project developed by " }<a href="https://syfaro.net">{ "Syfaro" }</a></p>
+                </div>
+            </div>
+
+            <div class="content">
                 {app_html(&state)}
             </div>
         </main>
     }
 }
 
-#[derive(Properties, PartialEq)]
-struct SearchResultsProps {
-    pub results: Rc<Vec<fuzzysearch_common::SearchResult>>,
-}
-
-#[function_component]
-fn SearchResults(props: &SearchResultsProps) -> Html {
-    if props.results.is_empty() {
-        return html! {
-            <div id="results">
-                <h2>{"No matches found"}</h2>
-            </div>
-        };
-    }
-
-    html! {
-        <div id="results">
-            {props.results.iter().map(|result| {
-                html! { <SearchResult key={result.site_id} result={result.to_owned()} /> }
-            }).collect::<Html>()}
-        </div>
-    }
-}
-
-#[derive(Properties, PartialEq)]
-struct SearchResultProps {
-    pub result: fuzzysearch_common::SearchResult,
-}
-
-#[function_component]
-fn SearchResult(props: &SearchResultProps) -> Html {
-    let artist_name = props
-        .result
-        .artists
-        .as_deref()
-        .unwrap_or_default()
-        .join(", ");
-
-    let url_without_scheme = props
-        .result
-        .url()
-        .replace("https://", "")
-        .replace("http://", "");
-
-    let display_url = url_without_scheme
-        .strip_prefix("www.")
-        .unwrap_or(&url_without_scheme);
-
-    html! {
-        <div class="search-result">
-            <strong>{format!("Result on {} (distance {})", props.result.site_name(), props.result.distance.unwrap_or(10))}</strong>
-            <br />
-            {format!("Posted by {}", artist_name)}
-            <br />
-            <a href={props.result.url()} rel={"external nofollow"}>{display_url}</a>
-        </div>
-    }
-}
-
 fn app_html(state: &AppState) -> Html {
     match state {
-        AppState::Waiting => html! { <p>{ "Upload an image" }</p> },
+        AppState::Waiting => html! { <h2>{ "Welcome! Upload an image to get started." }</h2> },
         AppState::Hashing => {
-            html! { <p aria-busy={state.is_loading()}>{ "Processing image upload" }</p> }
+            html! {
+                <div>
+                    <h2>{ "Analyzing" }</h2>
+                    <p class="help-text">{ "This image is being processed entirely on your device." }</p>
+                </div>
+            }
         }
         AppState::Searching { hash } => {
-            html! { <p aria-busy={state.is_loading()}>{ "Searching for hash " }<code>{ hash }</code></p> }
+            html! {
+                <div>
+                    <h2>{ "Searching" }</h2>
+                    <p class="help-text">{ "Your image's magic number is "}<code>{hash}</code></p>
+                </div>
+            }
         }
         AppState::Results { results } => {
             html! { <SearchResults results={results} /> }
         }
-        AppState::Error { message } => html! { <p>{ message }</p> },
+        AppState::Error { error } => html! {
+            <div class="error">
+                <h2>{ "Error" }</h2>
+                <p class="help-text">{ error.message() }</p>
+            </div>
+        },
     }
 }
