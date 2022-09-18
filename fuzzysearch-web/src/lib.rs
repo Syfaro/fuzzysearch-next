@@ -178,7 +178,7 @@ pub fn App(props: &AppProps) -> Html {
         <main class="container">
             <div class="sidebar">
                 <h1 class="title">{ "FuzzySearch" }</h1>
-                <h2 class="tagline">{ "Search images on FurAffinity, Weasyl, e621, and Twitter" }</h2>
+                <h2 class="tagline">{ "Reverse image search for FurAffinity, Weasyl, e621, and Twitter" }</h2>
 
                 <FileUploader on_file_upload={on_file_upload} />
 
@@ -197,7 +197,11 @@ pub fn App(props: &AppProps) -> Html {
                         { "." }
                     </p>
 
-                    <p class="credit">{ "FuzzySearch is a project developed by " }<a href="https://syfaro.net">{ "Syfaro" }</a></p>
+                    <p class="credit">
+                        { "FuzzySearch is a project developed by " }
+                        <a href="https://syfaro.net">{ "Syfaro" }</a>
+                        { "." }
+                    </p>
 
                     <p>
                         <a href="https://api-next.fuzzysearch.net/swagger-ui/#/">{ "API documentation" }</a>
