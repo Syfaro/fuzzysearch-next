@@ -29,8 +29,6 @@ impl Worker for ImageHasherWorker {
     fn update(&mut self, _msg: Self::Message) {}
 
     fn handle_input(&mut self, msg: Self::Input, id: HandlerId) {
-        tracing::trace!("received input for hashing");
-
         self.link.respond(id, ImageHasherWorkerOutput::Starting);
 
         let hash = image::load_from_memory(&msg.contents)
@@ -38,8 +36,6 @@ impl Worker for ImageHasherWorker {
             .map(|im| Self::get_hasher().hash_image(&im))
             .and_then(|hash| hash.as_bytes().try_into().ok())
             .map(i64::from_be_bytes);
-
-        tracing::debug!("finished hashing image");
 
         self.link
             .respond(id, ImageHasherWorkerOutput::Finished { hash });

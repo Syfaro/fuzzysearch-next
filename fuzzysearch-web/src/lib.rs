@@ -46,6 +46,8 @@ impl FuzzySearchApi {
     }
 
     async fn search(&self, url: String) -> Option<Vec<fuzzysearch_common::SearchResult>> {
+        tracing::debug!("performing search at {url}");
+
         let mut opts = RequestInit::new();
         opts.method("GET");
         opts.mode(RequestMode::Cors);
@@ -214,22 +216,33 @@ impl Component for App {
             return;
         }
 
-        if let Some(hash) = web_sys::window().and_then(|window| window.location().hash().ok()) {
-            if let Ok(url_search_params) = web_sys::UrlSearchParams::new_with_str(&hash[1..]) {
-                if let Some(url) = url_search_params.get("url") {
-                    tracing::info!("found url in hash, searching");
+        let hash = match web_sys::window().and_then(|window| window.location().hash().ok()) {
+            Some(hash) => hash,
+            None => return,
+        };
 
-                    ctx.link().send_message(AppMsg::SearchingUrl);
-
-                    let api = self.fuzzysearch_api.clone();
-                    ctx.link().send_future(async move {
-                        AppMsg::GotSearchResult {
-                            result: api.search_url(&url).await,
-                        }
-                    });
-                }
-            }
+        if hash.len() < 2 {
+            return;
         }
+
+        let url = match web_sys::UrlSearchParams::new_with_str(&hash[1..])
+            .ok()
+            .and_then(|params| params.get("url"))
+        {
+            Some(url) => url,
+            None => return,
+        };
+
+        tracing::info!(url, "found url in hash, searching");
+
+        ctx.link().send_message(AppMsg::SearchingUrl);
+
+        let api = self.fuzzysearch_api.clone();
+        ctx.link().send_future(async move {
+            AppMsg::GotSearchResult {
+                result: api.search_url(&url).await,
+            }
+        });
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
