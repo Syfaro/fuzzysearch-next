@@ -36,11 +36,11 @@ struct SearchResultProps {
 
 fn name_for_distance(distance: i64) -> &'static str {
     match distance {
-        0 => "exact match",
-        1..=2 => "very close match",
-        3 => "close match",
-        4..=7 => "possible match",
-        _ => "unlikely match",
+        0 => "Exact match",
+        1..=2 => "Very close match",
+        3 => "Close match",
+        4..=7 => "Possible match",
+        _ => "Unlikely match",
     }
 }
 
@@ -68,10 +68,12 @@ fn SearchResult(props: &SearchResultProps) -> Html {
     html! {
         <div class="search-result">
             <h3>
-                {format!("{} ({})", props.result.site_name(), name_for_distance(distance))}
+                {props.result.site_name()}
             </h3>
             <p class="posted-by">
-                {format!("Posted by {}", artist_name)}
+                <span title={format!("Perceptual distance of {distance}")}>{ name_for_distance(distance) }</span>
+                { " posted by " }
+                <strong>{ artist_name }</strong>
             </p>
             <p class="link">
                 <a href={props.result.url()} rel={"external nofollow"}>{display_url}</a>

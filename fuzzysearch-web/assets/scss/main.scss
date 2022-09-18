@@ -69,7 +69,7 @@ body {
   );
 
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 3rem;
 
   align-items: center;
@@ -145,6 +145,12 @@ h2.tagline {
   .link {
     margin-top: 0.5em;
   }
+
+  .link {
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+  }
 }
 
 a {
@@ -169,7 +175,7 @@ a:hover {
   .container {
     padding: 1em;
     background-color: $direwolf-100;
-    grid-template-columns: repeat(1, 1fr);
+    grid-template-columns: repeat(1, minmax(0, 1fr));
     align-items: initial;
   }
 
