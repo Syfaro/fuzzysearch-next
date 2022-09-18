@@ -9,7 +9,7 @@ authors = ["Syfaro <syfaro@huefox.com>"]
 yew = { git = "https://github.com/yewstack/yew.git", features = ["csr", "hydration"] }
 serde = { version = "1.0.144", features = ["derive"] }
 yew-agent = { git = "https://github.com/yewstack/yew.git" }
-web-sys = { version = "0.3.59", features = ["DataTransfer", "DataTransferItemList", "DataTransferItem"] }
+web-sys = { version = "0.3.59", features = ["DataTransfer", "DataTransferItemList", "DataTransferItem", "ClipboardEvent"] }
 wasm-bindgen = "0.2.82"
 image = { version = "0.23.14", default-features = false, features = ["jpeg", "png", "webp"] }
 img_hash = "3.2.0"

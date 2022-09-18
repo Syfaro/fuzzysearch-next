@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 
-use gloo::file::{callbacks::FileReader, File};
+use gloo::{
+    events::EventListener,
+    file::{callbacks::FileReader, File},
+};
+use wasm_bindgen::JsCast;
 use web_sys::{FileList, HtmlElement, HtmlInputElement};
 use yew::prelude::*;
 
@@ -17,6 +21,8 @@ pub struct FileUploader {
     preview_url: Option<String>,
     drag_state: FileUploaderDragState,
     upload_container_ref: NodeRef,
+    #[allow(dead_code)]
+    paste_listener: Option<EventListener>,
 }
 
 pub enum FileUploaderMsg {
@@ -25,6 +31,7 @@ pub enum FileUploaderMsg {
     Loaded(String, String, Option<Vec<u8>>),
     DragEvent(DragEvent),
     UploadContainerClicked,
+    Paste(Event),
 }
 
 #[derive(Properties, PartialEq)]
@@ -36,8 +43,19 @@ impl Component for FileUploader {
     type Message = FileUploaderMsg;
     type Properties = FileUploaderProps;
 
-    fn create(_ctx: &Context<Self>) -> Self {
-        Self::default()
+    fn create(ctx: &Context<Self>) -> Self {
+        let onpaste = ctx
+            .link()
+            .callback(|event: Event| FileUploaderMsg::Paste(event));
+
+        let paste_listener = web_sys::window().map(|window| {
+            EventListener::new(&window, "paste", move |event| onpaste.emit(event.clone()))
+        });
+
+        Self {
+            paste_listener,
+            ..Default::default()
+        }
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
@@ -111,6 +129,17 @@ impl Component for FileUploader {
             FileUploaderMsg::UploadContainerClicked => {
                 if let Some(html_element) = self.upload_container_ref.cast::<HtmlElement>() {
                     html_element.click();
+                }
+
+                false
+            }
+            FileUploaderMsg::Paste(paste) => {
+                if let Some(data) = paste
+                    .dyn_into::<web_sys::ClipboardEvent>()
+                    .ok()
+                    .and_then(|event| event.clipboard_data())
+                {
+                    ctx.link().send_message(Self::upload_files(data.files()));
                 }
 
                 false

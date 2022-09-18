@@ -169,9 +169,7 @@ pub fn App(props: &AppProps) -> Html {
                 <h1 class="title">{ "FuzzySearch" }</h1>
                 <h2 class="tagline">{ "Search images on FurAffinity, Weasyl, e621, and Twitter" }</h2>
 
-                <form>
-                    <FileUploader on_file_upload={on_file_upload} />
-                </form>
+                <FileUploader on_file_upload={on_file_upload} />
 
                 <div class="about">
                     <p class="bot-links">
