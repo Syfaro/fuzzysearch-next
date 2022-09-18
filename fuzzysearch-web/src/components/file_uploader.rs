@@ -8,6 +8,8 @@ use wasm_bindgen::JsCast;
 use web_sys::{FileList, HtmlElement, HtmlInputElement};
 use yew::prelude::*;
 
+use crate::umami;
+
 #[derive(Default)]
 enum FileUploaderDragState {
     #[default]
@@ -49,6 +51,7 @@ impl Component for FileUploader {
             .callback(|event: Event| FileUploaderMsg::Paste(event));
 
         let paste_listener = web_sys::window().map(|window| {
+            umami::track_event("image-search", "paste");
             EventListener::new(&window, "paste", move |event| onpaste.emit(event.clone()))
         });
 
@@ -163,10 +166,12 @@ impl Component for FileUploader {
                     ondrop={ctx.link().callback(|event: DragEvent| {
                         event.prevent_default();
                         let files = event.data_transfer().map(|dt| dt.files()).unwrap_or_default();
+                        umami::track_event("image-search", "drop");
                         Self::upload_files(files)
                     })}
                     onclick={ctx.link().callback(|event: MouseEvent| {
                         event.prevent_default();
+                        umami::track_event("image-search", "upload");
                         FileUploaderMsg::UploadContainerClicked
                     })}
                     ondragover={drag_event.clone()}
@@ -183,6 +188,7 @@ impl Component for FileUploader {
                     ref={self.upload_container_ref.clone()}
                     onchange={ctx.link().callback(move |e: Event| {
                         let input: HtmlInputElement = e.target_unchecked_into();
+                        umami::track_event("image-search", "upload");
                         Self::upload_files(input.files())
                     })} />
             </form>

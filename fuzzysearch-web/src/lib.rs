@@ -10,6 +10,7 @@ use crate::components::{file_uploader::FileUploader, search_results::SearchResul
 use crate::workers::{ImageHasherWorker, ImageHasherWorkerInput, ImageHasherWorkerOutput};
 
 pub mod components;
+pub mod umami;
 pub mod workers;
 
 pub struct FuzzySearchApi {
@@ -72,6 +73,13 @@ impl AppError {
             Self::Api => "Image lookup failed",
         }
     }
+
+    fn event(&self) -> &'static str {
+        match self {
+            Self::InvalidImage => "invalid-image",
+            Self::Api => "api",
+        }
+    }
 }
 
 enum AppAction {
@@ -117,7 +125,10 @@ impl Reducible for AppState {
             AppAction::GotMatches { results } => AppState::Results {
                 results: Rc::new(results),
             },
-            AppAction::EncounteredError { error } => AppState::Error { error },
+            AppAction::EncounteredError { error } => {
+                umami::track_event(error.event(), "error");
+                AppState::Error { error }
+            }
         };
 
         next_state.into()
