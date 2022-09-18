@@ -183,10 +183,16 @@ pub fn App(props: &AppProps) -> Html {
                     </p>
 
                     <p>
-                        <a href="https://api-next.fuzzysearch.net/swagger-ui/#/">{ "API documentation" }</a>
+                        { "Are you interested in notifications when your artwork is reposted? Try " }
+                        <a href="https://owo.fuzzysearch.net">{ "FuzzySearch OwO" }</a>
+                        { "." }
                     </p>
 
                     <p class="credit">{ "FuzzySearch is a project developed by " }<a href="https://syfaro.net">{ "Syfaro" }</a></p>
+
+                    <p>
+                        <a href="https://api-next.fuzzysearch.net/swagger-ui/#/">{ "API documentation" }</a>
+                    </p>
                 </div>
             </div>
 
