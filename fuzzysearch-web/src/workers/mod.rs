@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use yew_agent::{HandlerId, Public, Worker, WorkerLink};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ImageHasherWorkerInput {
     pub contents: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum ImageHasherWorkerOutput {
     Starting,
     Finished { hash: Option<i64> },

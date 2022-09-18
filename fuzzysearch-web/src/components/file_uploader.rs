@@ -46,9 +46,7 @@ impl Component for FileUploader {
     type Properties = FileUploaderProps;
 
     fn create(ctx: &Context<Self>) -> Self {
-        let onpaste = ctx
-            .link()
-            .callback(|event: Event| FileUploaderMsg::Paste(event));
+        let onpaste = ctx.link().callback(FileUploaderMsg::Paste);
 
         let paste_listener = web_sys::window().map(|window| {
             umami::track_event("image-search", "paste");

@@ -3,8 +3,8 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Request, RequestInit, RequestMode, Response};
-use yew::{platform::spawn_local, prelude::*};
-use yew_agent::{use_bridge, UseBridgeHandle};
+use yew::prelude::*;
+use yew_agent::{Bridge, Bridged};
 
 use crate::components::{file_uploader::FileUploader, search_results::SearchResults};
 use crate::workers::{ImageHasherWorker, ImageHasherWorkerInput, ImageHasherWorkerOutput};
@@ -18,7 +18,7 @@ pub struct FuzzySearchApi {
 }
 
 impl FuzzySearchApi {
-    const ENDPOINT: &'static str = "https://api.fuzzysearch.net";
+    const ENDPOINT: &'static str = "https://api-next.fuzzysearch.net";
 
     pub fn new<S>(api_token: S) -> Self
     where
@@ -30,11 +30,25 @@ impl FuzzySearchApi {
     }
 
     pub async fn search_hash(&self, hash: i64) -> Option<Vec<fuzzysearch_common::SearchResult>> {
+        self.search(format!(
+            "{}/hashes?distance=3&hash={}",
+            Self::ENDPOINT,
+            hash
+        ))
+        .await
+    }
+
+    pub async fn search_url(&self, url: &str) -> Option<Vec<fuzzysearch_common::SearchResult>> {
+        let url = js_sys::encode_uri_component(url);
+
+        self.search(format!("{}/url?url={}", Self::ENDPOINT, url))
+            .await
+    }
+
+    async fn search(&self, url: String) -> Option<Vec<fuzzysearch_common::SearchResult>> {
         let mut opts = RequestInit::new();
         opts.method("GET");
         opts.mode(RequestMode::Cors);
-
-        let url = format!("{}/hashes?distance=3&hashes={}", Self::ENDPOINT, hash);
 
         let request = Request::new_with_str_and_init(&url, &opts).ok()?;
         request.headers().set("x-api-key", &self.api_token).ok()?;
@@ -61,6 +75,7 @@ pub struct AppProps {
     pub fuzzysearch_api_token: String,
 }
 
+#[derive(Debug)]
 enum AppError {
     InvalidImage,
     Api,
@@ -82,167 +97,230 @@ impl AppError {
     }
 }
 
-enum AppAction {
-    StartedHashing,
-    FinishedHashing {
-        hash: i64,
+pub enum AppMsg {
+    SearchingUrl,
+    GotFileUpload {
+        contents: Vec<u8>,
     },
-    GotMatches {
-        results: Vec<fuzzysearch_common::SearchResult>,
+    GotHasherWorkerOutput {
+        output: ImageHasherWorkerOutput,
     },
-    EncounteredError {
-        error: AppError,
+    GotSearchResult {
+        result: Option<Vec<fuzzysearch_common::SearchResult>>,
     },
 }
 
+pub struct App {
+    state: AppState,
+    fuzzysearch_api: Rc<FuzzySearchApi>,
+    hasher: Box<dyn Bridge<ImageHasherWorker>>,
+}
+
+#[derive(Debug, Default)]
 enum AppState {
+    #[default]
     Waiting,
     Hashing,
-    Searching {
+    SearchingHash {
         hash: i64,
     },
-    Results {
+    SearchingUrl,
+    DisplayingResults {
         results: Rc<Vec<fuzzysearch_common::SearchResult>>,
     },
-    Error {
+    DisplayingError {
         error: AppError,
     },
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self::Waiting
-    }
-}
+impl Component for App {
+    type Message = AppMsg;
+    type Properties = AppProps;
 
-impl Reducible for AppState {
-    type Action = AppAction;
+    fn create(ctx: &Context<Self>) -> Self {
+        let fuzzysearch_api = Rc::new(FuzzySearchApi::new(
+            ctx.props().fuzzysearch_api_token.clone(),
+        ));
 
-    fn reduce(self: Rc<Self>, action: Self::Action) -> Rc<Self> {
-        let next_state = match action {
-            AppAction::StartedHashing => AppState::Hashing,
-            AppAction::FinishedHashing { hash } => AppState::Searching { hash },
-            AppAction::GotMatches { results } => AppState::Results {
-                results: Rc::new(results),
-            },
-            AppAction::EncounteredError { error } => {
-                umami::track_event(error.event(), "error");
-                AppState::Error { error }
-            }
+        let cb = {
+            let link = ctx.link().clone();
+            move |output| link.send_message(AppMsg::GotHasherWorkerOutput { output })
         };
 
-        next_state.into()
+        Self {
+            state: Default::default(),
+            fuzzysearch_api,
+            hasher: ImageHasherWorker::bridge(Rc::new(cb)),
+        }
     }
-}
 
-#[function_component]
-pub fn App(props: &AppProps) -> Html {
-    let state = use_reducer(AppState::default);
-
-    let bridge: UseBridgeHandle<ImageHasherWorker> = {
-        let state = state.clone();
-        let api_token = props.fuzzysearch_api_token.clone();
-
-        use_bridge(move |response: ImageHasherWorkerOutput| match response {
-            ImageHasherWorkerOutput::Starting => state.dispatch(AppAction::StartedHashing),
-            ImageHasherWorkerOutput::Finished { hash: Some(hash) } => {
-                state.dispatch(AppAction::FinishedHashing { hash });
-
-                let state = state.clone();
-                let api_token = api_token.clone();
-
-                spawn_local(async move {
-                    let fuzzysearch_api = FuzzySearchApi::new(api_token);
-
-                    match fuzzysearch_api.search_hash(hash).await {
-                        Some(results) => state.dispatch(AppAction::GotMatches { results }),
-                        None => state.dispatch(AppAction::EncounteredError {
-                            error: AppError::Api,
-                        }),
+    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
+        match msg {
+            AppMsg::SearchingUrl => {
+                self.state = AppState::SearchingUrl;
+                true
+            }
+            AppMsg::GotFileUpload { contents } => {
+                self.hasher.send(ImageHasherWorkerInput { contents });
+                false
+            }
+            AppMsg::GotHasherWorkerOutput {
+                output: ImageHasherWorkerOutput::Starting,
+            } => {
+                self.state = AppState::Hashing;
+                true
+            }
+            AppMsg::GotHasherWorkerOutput {
+                output: ImageHasherWorkerOutput::Finished { hash: Some(hash) },
+            } => {
+                let api = self.fuzzysearch_api.clone();
+                ctx.link().send_future(async move {
+                    AppMsg::GotSearchResult {
+                        result: api.search_hash(hash).await,
                     }
                 });
+                self.state = AppState::SearchingHash { hash };
+                true
             }
-            ImageHasherWorkerOutput::Finished { hash: None } => {
-                state.dispatch(AppAction::EncounteredError {
-                    error: AppError::InvalidImage,
-                })
+            AppMsg::GotHasherWorkerOutput {
+                output: ImageHasherWorkerOutput::Finished { hash: None },
+            } => {
+                let error = AppError::InvalidImage;
+
+                umami::track_event(error.event(), "error");
+                self.state = AppState::DisplayingError { error };
+                true
             }
-        })
-    };
+            AppMsg::GotSearchResult {
+                result: Some(results),
+            } => {
+                self.state = AppState::DisplayingResults {
+                    results: Rc::new(results),
+                };
+                true
+            }
+            AppMsg::GotSearchResult { result: None } => {
+                let error = AppError::Api;
 
-    let on_file_upload: Callback<Vec<u8>> = Callback::from(move |contents: Vec<u8>| {
-        bridge.send(ImageHasherWorkerInput { contents });
-    });
+                umami::track_event(error.event(), "error");
+                self.state = AppState::DisplayingError { error };
+                true
+            }
+        }
+    }
 
-    html! {
-        <main class="container">
-            <div class="sidebar">
-                <h1 class="title">{ "FuzzySearch" }</h1>
-                <h2 class="tagline">{ "Reverse image search for FurAffinity, Weasyl, e621, and Twitter" }</h2>
+    fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
+        if !first_render {
+            return;
+        }
 
-                <FileUploader on_file_upload={on_file_upload} />
+        if let Some(hash) = web_sys::window().and_then(|window| window.location().hash().ok()) {
+            if let Ok(url_search_params) = web_sys::UrlSearchParams::new_with_str(&hash[1..]) {
+                if let Some(url) = url_search_params.get("url") {
+                    tracing::info!("found url in hash, searching");
 
-                <div class="about">
-                    <p class="bot-links">
-                        { "Want to integrate this service in your chats? Check out FoxBot for " }
-                        <a href="https://t.me">{ "Telegram" }</a>
-                        { " and " }
-                        <a href="https://discord.com/oauth2/authorize?client_id=824071620783243336&scope=applications.commands">{ "Discord" }</a>
-                        { "!" }
-                    </p>
+                    ctx.link().send_message(AppMsg::SearchingUrl);
 
-                    <p>
-                        { "Are you interested in notifications when your artwork is reposted? Try " }
-                        <a href="https://owo.fuzzysearch.net">{ "FuzzySearch OwO" }</a>
-                        { "." }
-                    </p>
+                    let api = self.fuzzysearch_api.clone();
+                    ctx.link().send_future(async move {
+                        AppMsg::GotSearchResult {
+                            result: api.search_url(&url).await,
+                        }
+                    });
+                }
+            }
+        }
+    }
 
-                    <p class="credit">
-                        { "FuzzySearch is a project developed by " }
-                        <a href="https://syfaro.net">{ "Syfaro" }</a>
-                        { "." }
-                    </p>
+    fn view(&self, ctx: &Context<Self>) -> Html {
+        let on_file_upload = ctx
+            .link()
+            .callback(|contents| AppMsg::GotFileUpload { contents });
 
-                    <p>
-                        <a href="https://api-next.fuzzysearch.net/swagger-ui/#/">{ "API documentation" }</a>
-                    </p>
+        html! {
+            <main class="container">
+                <div class="sidebar">
+                    <h1 class="title">{ "FuzzySearch" }</h1>
+                    <h2 class="tagline">{ "Reverse image search for FurAffinity, Weasyl, e621, and Twitter" }</h2>
+
+                    <FileUploader on_file_upload={on_file_upload} />
+
+                    {self.about()}
                 </div>
-            </div>
 
-            <div class="content">
-                {app_html(&state)}
-            </div>
-        </main>
+                <div class="content">
+                    {self.content()}
+                </div>
+            </main>
+        }
     }
 }
 
-fn app_html(state: &AppState) -> Html {
-    match state {
-        AppState::Waiting => html! { <h2>{ "Welcome! Upload an image to get started." }</h2> },
-        AppState::Hashing => {
-            html! {
+impl App {
+    fn content(&self) -> Html {
+        match &self.state {
+            AppState::Waiting => html! {
+                <div>
+                    <h2>{ "Welcome! Upload an image to get started." }</h2>
+                </div>
+            },
+            AppState::Hashing => html! {
                 <div>
                     <h2>{ "Analyzing" }</h2>
                     <p class="help-text">{ "This image is being processed entirely on your device." }</p>
                 </div>
-            }
-        }
-        AppState::Searching { hash } => {
-            html! {
+            },
+            AppState::SearchingHash { hash } => html! {
                 <div>
                     <h2>{ "Searching" }</h2>
                     <p class="help-text">{ "Your image's magic number is "}<code>{hash}</code></p>
                 </div>
-            }
+            },
+            AppState::SearchingUrl { .. } => html! {
+                <div>
+                    <h2>{ "Loading URL" }</h2>
+                    <p class="help-text">{ "Downloading and analyzing URL." }</p>
+                </div>
+            },
+            AppState::DisplayingResults { results } => html! {
+                <SearchResults results={results} />
+            },
+            AppState::DisplayingError { error } => html! {
+                <div class="error">
+                    <h2>{ "Error" }</h2>
+                    <p class="help-text">{ error.message() }</p>
+                </div>
+            },
         }
-        AppState::Results { results } => {
-            html! { <SearchResults results={results} /> }
-        }
-        AppState::Error { error } => html! {
-            <div class="error">
-                <h2>{ "Error" }</h2>
-                <p class="help-text">{ error.message() }</p>
+    }
+
+    fn about(&self) -> Html {
+        html! {
+            <div class="about">
+                <p class="bot-links">
+                    { "Want to integrate this service in your chats? Check out FoxBot for " }
+                    <a href="https://t.me">{ "Telegram" }</a>
+                    { " and " }
+                    <a href="https://discord.com/oauth2/authorize?client_id=824071620783243336&scope=applications.commands">{ "Discord" }</a>
+                    { "!" }
+                </p>
+
+                <p>
+                    { "Are you interested in notifications when your artwork is reposted? Try " }
+                    <a href="https://owo.fuzzysearch.net">{ "FuzzySearch OwO" }</a>
+                    { "." }
+                </p>
+
+                <p class="credit">
+                    { "FuzzySearch is a project developed by " }
+                    <a href="https://syfaro.net">{ "Syfaro" }</a>
+                    { "." }
+                </p>
+
+                <p>
+                    <a href="https://api-next.fuzzysearch.net/swagger-ui/#/">{ "API documentation" }</a>
+                </p>
             </div>
-        },
+        }
     }
 }
