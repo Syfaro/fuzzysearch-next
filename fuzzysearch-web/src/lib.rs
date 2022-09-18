@@ -68,8 +68,8 @@ enum AppError {
 impl AppError {
     fn message(&self) -> &'static str {
         match self {
-            Self::InvalidImage => "Image was not understood",
-            Self::Api => "Image lookup error",
+            Self::InvalidImage => "Unknown format, only JPEG, PNG, and WebP files are supported",
+            Self::Api => "Image lookup failed",
         }
     }
 }
@@ -180,6 +180,10 @@ pub fn App(props: &AppProps) -> Html {
                         { " and " }
                         <a href="https://discord.com/oauth2/authorize?client_id=824071620783243336&scope=applications.commands">{ "Discord" }</a>
                         { "!" }
+                    </p>
+
+                    <p>
+                        <a href="https://api-next.fuzzysearch.net/swagger-ui/#/">{ "API documentation" }</a>
                     </p>
 
                     <p class="credit">{ "FuzzySearch is a project developed by " }<a href="https://syfaro.net">{ "Syfaro" }</a></p>
