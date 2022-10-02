@@ -4,6 +4,7 @@ use gloo::{
     events::EventListener,
     file::{callbacks::FileReader, File},
 };
+use semester::StaticClasses;
 use wasm_bindgen::JsCast;
 use web_sys::{FileList, HtmlElement, HtmlInputElement};
 use yew::prelude::*;
@@ -195,17 +196,13 @@ impl Component for FileUploader {
 }
 
 impl FileUploader {
-    fn classes(&self) -> Vec<&'static str> {
-        let mut classes = match self.drag_state {
-            FileUploaderDragState::None => vec!["file-upload"],
-            FileUploaderDragState::Valid => vec!["file-upload", "drag-valid"],
-        };
-
-        if self.preview_url.is_some() {
-            classes.push("previewing");
-        }
-
-        classes
+    fn classes(&self) -> &'static str {
+        semester::static_classes!(
+            "file-upload",
+            "drag-valid": matches!(self.drag_state, FileUploaderDragState::Valid),
+            "previewing": self.preview_url.is_some()
+        )
+        .as_str()
     }
 
     fn upload_files(files: Option<FileList>) -> FileUploaderMsg {

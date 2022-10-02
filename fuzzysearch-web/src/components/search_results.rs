@@ -44,6 +44,18 @@ fn name_for_distance(distance: i64) -> &'static str {
     }
 }
 
+fn strip_parts<'a>(s: &'a str, prefixes: &[&'static str], suffixes: &[&'static str]) -> &'a str {
+    let s = prefixes
+        .iter()
+        .fold(s, |s, prefix| s.strip_prefix(*prefix).unwrap_or(s));
+
+    let s = suffixes
+        .iter()
+        .fold(s, |s, suffix| s.strip_suffix(*suffix).unwrap_or(s));
+
+    s
+}
+
 #[function_component]
 fn SearchResult(props: &SearchResultProps) -> Html {
     let artist_name = props
@@ -53,15 +65,8 @@ fn SearchResult(props: &SearchResultProps) -> Html {
         .unwrap_or_default()
         .join(", ");
 
-    let url_without_scheme = props
-        .result
-        .url()
-        .replace("https://", "")
-        .replace("http://", "");
-
-    let display_url = url_without_scheme
-        .strip_prefix("www.")
-        .unwrap_or(&url_without_scheme);
+    let url = props.result.url();
+    let display_url = strip_parts(&url, &["https://", "http://", "www."], &["/"]);
 
     let distance = props.result.distance.unwrap_or(10);
 
@@ -79,5 +84,27 @@ fn SearchResult(props: &SearchResultProps) -> Html {
                 <a href={props.result.url()} rel={"external nofollow"}>{display_url}</a>
             </p>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_parts;
+
+    #[test]
+    fn test_strip_parts() {
+        let test_cases: [(&'static str, &[&'static str], &[&'static str], &'static str); 2] = [
+            ("google.com", &["https://"], &["/"], "google.com"),
+            (
+                "https://www.google.com/",
+                &["https://", "www."],
+                &["/"],
+                "google.com",
+            ),
+        ];
+
+        for (input, prefixes, suffixes, output) in test_cases {
+            assert_eq!(output, strip_parts(input, prefixes, suffixes));
+        }
     }
 }
