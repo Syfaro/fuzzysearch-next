@@ -66,7 +66,26 @@ impl FuzzySearchApi {
         let data = JsFuture::from(resp.text().ok()?).await.ok()?.as_string()?;
         let mut results: Vec<fuzzysearch_common::SearchResult> =
             serde_json::from_str(&data).ok()?;
-        results.sort_by(|a, b| a.distance.unwrap_or(10).cmp(&b.distance.unwrap_or(10)));
+
+        // Ensure all results have unique URLs. Sometimes a single Tweet can
+        // have multiple photos that match.
+        results.sort_by_key(|result| result.url());
+        results.dedup_by_key(|result| result.url());
+
+        // Custom sort ordering logic. If both distances are likely matches,
+        // only sort based on site as they are all good matches. Otherwise, sort
+        // on distance then site.
+        results.sort_by(|a, b| {
+            let (a_distance, b_distance) = (a.distance.unwrap_or(10), b.distance.unwrap_or(10));
+            if a_distance <= 3 && b_distance <= 3 {
+                a.site_info.cmp(&b.site_info)
+            } else {
+                match a_distance.cmp(&b_distance) {
+                    std::cmp::Ordering::Equal => a.site_info.cmp(&b.site_info),
+                    other => other,
+                }
+            }
+        });
 
         Some(results)
     }
@@ -286,7 +305,7 @@ impl App {
             AppState::SearchingHash { hash } => html! {
                 <div>
                     <h2>{ "Searching" }</h2>
-                    <p class="help-text">{ "Your image's magic number is "}<code>{hash}</code></p>
+                    <p class="help-text"><code>{hash}</code>{ " is your image's magic number."}</p>
                 </div>
             },
             AppState::SearchingUrl { .. } => html! {

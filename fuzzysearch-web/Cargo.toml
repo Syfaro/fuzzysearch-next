@@ -13,6 +13,7 @@ hex = "0.4.3"
 image = { version = "0.23.14", default-features = false, features = ["jpeg", "png", "webp"] }
 img_hash = "3.2.0"
 js-sys = "0.3.59"
+semester = "1.0.0"
 serde = { version = "1.0.144", features = ["derive"] }
 serde_json = "1.0.85"
 tracing = "0.1.36"

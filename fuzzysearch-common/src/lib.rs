@@ -53,7 +53,7 @@ pub struct Image {
 }
 
 /// Site-specific information.
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
 #[serde(tag = "site", content = "site_info")]
 pub enum SiteInfo {
@@ -61,13 +61,13 @@ pub enum SiteInfo {
         /// The file ID on FurAffinity. Note that this is not the same as the submission ID.
         file_id: i32,
     },
+    Weasyl,
+    Twitter,
     #[serde(rename = "e621")]
     E621 {
         /// The sources attached to this post.
         sources: Vec<String>,
     },
-    Twitter,
-    Weasyl,
     #[default]
     Unknown,
 }
