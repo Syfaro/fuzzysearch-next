@@ -28,7 +28,7 @@ struct Item {
 }
 
 mod artist {
-    pub fn serialize<S>(artists: &Vec<String>, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(artists: &[String], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -140,7 +140,7 @@ async fn main() {
         let posted_at = row
             .posted_at
             .and_then(|posted_at| chrono::DateTime::parse_from_rfc3339(&posted_at).ok())
-            .map(|posted_at| chrono::DateTime::<chrono::Utc>::from(posted_at));
+            .map(chrono::DateTime::<chrono::Utc>::from);
 
         dump.serialize(&Item {
             site: Site::Weasyl,
@@ -171,7 +171,7 @@ async fn main() {
         let posted_at = row
             .created_at
             .and_then(|created_at| chrono::DateTime::parse_from_rfc3339(&created_at).ok())
-            .map(|created_at| chrono::DateTime::<chrono::Utc>::from(created_at));
+            .map(chrono::DateTime::<chrono::Utc>::from);
 
         dump.serialize(&Item {
             site: Site::E621,
