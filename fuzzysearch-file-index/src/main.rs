@@ -70,6 +70,9 @@ enum ExplorationCommand {
         /// Width of generated image.
         #[clap(long, env, default_value = "2000")]
         width: u32,
+        /// Filter to only images on a given site.
+        #[clap(long, value_enum)]
+        site: Option<Site>,
         /// If image should use colors instead of being black and white.
         #[clap(short = 'c', long, env)]
         use_color: bool,
@@ -185,6 +188,7 @@ async fn main() -> Result<()> {
                 ExplorationCommand::DimensionsImage {
                     height,
                     width,
+                    site,
                     use_color,
                     color_scale,
                     output,
@@ -200,17 +204,22 @@ async fn main() -> Result<()> {
 
             let mut pixel_counts: HashMap<Dimension, usize> = HashMap::new();
 
-            let mut rows = sqlx::query_file!("queries/file_dimensions.sql").fetch(&pool);
-            while let Some(Ok(row)) = rows.next().await {
-                let dimension = match (row.height, row.width) {
-                    (Some(height), Some(width)) => Dimension {
-                        height: height as u32,
-                        width: width as u32,
-                    },
-                    _ => continue,
-                };
-
-                *pixel_counts.entry(dimension).or_default() += 1;
+            if let Some(site) = site {
+                let mut rows = sqlx::query_file_as!(
+                    RowDimension,
+                    "queries/file_dimensions_site.sql",
+                    site.id()
+                )
+                .fetch(&pool);
+                while let Some(Ok(row)) = rows.next().await {
+                    *pixel_counts.entry(row.into()).or_default() += 1;
+                }
+            } else {
+                let mut rows =
+                    sqlx::query_file_as!(RowDimension, "queries/file_dimensions.sql").fetch(&pool);
+                while let Some(Ok(row)) = rows.next().await {
+                    *pixel_counts.entry(row.into()).or_default() += 1;
+                }
             }
 
             pixel_counts.into_iter().for_each(|(dimension, count)| {
@@ -468,8 +477,9 @@ fn read_dump(path: PathBuf, tx: tokio::sync::mpsc::Sender<Item>) {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
 enum Site {
     FurAffinity,
     Weasyl,
@@ -530,8 +540,22 @@ mod b64_vec {
     }
 }
 
+struct RowDimension {
+    height: i32,
+    width: i32,
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 struct Dimension {
     height: u32,
     width: u32,
+}
+
+impl From<RowDimension> for Dimension {
+    fn from(row: RowDimension) -> Self {
+        Dimension {
+            height: row.height as u32,
+            width: row.width as u32,
+        }
+    }
 }
