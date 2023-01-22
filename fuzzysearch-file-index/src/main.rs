@@ -51,6 +51,10 @@ enum Command {
         /// FuzzySearch dump file path.
         #[clap(env, index = 1)]
         dump: String,
+
+        /// Path to file containing updated hash for a submission.
+        #[clap(short, long)]
+        updates_file: Option<String>,
     },
 
     /// Explore data.
@@ -148,12 +152,14 @@ async fn main() -> Result<()> {
             process_files(pool, rx, available_parallelism).await;
         }
 
-        Command::ImportAssociations { dump } => {
+        Command::ImportAssociations { dump, updates_file } => {
             tracing::info!("importing associations: {}", dump);
 
             let (tx, rx) = tokio::sync::mpsc::channel(available_parallelism);
 
-            tokio::task::spawn_blocking(move || read_dump(PathBuf::from(dump), tx));
+            tokio::task::spawn_blocking(move || {
+                read_dump(PathBuf::from(dump), updates_file.map(PathBuf::from), tx)
+            });
 
             tokio_stream::wrappers::ReceiverStream::new(rx)
                 .chunks_timeout(1_000, Duration::from_secs(10))
@@ -438,7 +444,7 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
     .map_err(|_err| eyre::eyre!("decoding image panicked"))?;
 
     let exif_entries: Option<Vec<_>> = tokio::task::spawn_blocking(move || {
-        let mut file = std::io::BufReader::new(std::fs::File::open(&path).unwrap());
+        let mut file = std::io::BufReader::new(std::fs::File::open(path).unwrap());
 
         exif::Reader::new()
             .read_from_container(&mut file)
@@ -466,18 +472,47 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
     })
 }
 
-fn read_dump(path: PathBuf, tx: tokio::sync::mpsc::Sender<Item>) {
+#[derive(Deserialize)]
+struct UpdateFileRow {
+    site: Site,
+    id: i64,
+    #[serde(with = "b64_vec")]
+    sha256: Option<Vec<u8>>,
+}
+
+fn read_dump(path: PathBuf, updates: Option<PathBuf>, tx: tokio::sync::mpsc::Sender<Item>) {
+    let update_lookup = if let Some(updates) = updates {
+        let updates = std::fs::File::open(updates).unwrap();
+        let mut rdr = csv::Reader::from_reader(updates);
+
+        rdr.deserialize::<UpdateFileRow>()
+            .filter_map(|file| file.ok())
+            .filter_map(|row| row.sha256.map(|hash| ((row.site, row.id), hash)))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+
     let f = std::fs::File::open(path).unwrap();
 
     let mut rdr = csv::Reader::from_reader(f);
     let files = rdr.deserialize::<Item>();
 
     for file in files.filter_map(|f| f.ok()) {
+        if let Some(hash) = update_lookup.get(&(file.site, file.id)) {
+            tracing::trace!(site = %file.site, id = file.id, "file had updated hash");
+            tx.blocking_send(Item {
+                sha256: Some(hash.to_owned()),
+                ..file
+            })
+            .expect("could not send updated item");
+        }
+
         tx.blocking_send(file).expect("could not send item");
     }
 }
 
-#[derive(Clone, Debug, Deserialize, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, Deserialize, Hash, PartialEq, Eq, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 #[clap(rename_all = "lowercase")]
 enum Site {
@@ -492,6 +527,16 @@ impl Site {
             Self::FurAffinity => 1,
             Self::E621 => 2,
             Self::Weasyl => 4,
+        }
+    }
+}
+
+impl std::fmt::Display for Site {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FurAffinity => write!(f, "FurAffinity"),
+            Self::Weasyl => write!(f, "Weasyl"),
+            Self::E621 => write!(f, "e621"),
         }
     }
 }
