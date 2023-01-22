@@ -13,7 +13,7 @@ use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 const METADATA_VERSION: i32 = 2;
 
@@ -55,6 +55,16 @@ enum Command {
         /// Path to file containing updated hash for a submission.
         #[clap(short, long)]
         updates_file: Option<String>,
+    },
+
+    /// Download previously indexed submissions missing a sha256 hash.
+    DownloadUnknown {
+        /// Path to file containing IDs and URLs.
+        #[clap(env, index = 1)]
+        submissions: String,
+        /// Directory to download files.
+        #[clap(env, index = 2)]
+        directory: PathBuf,
     },
 
     /// Explore data.
@@ -188,7 +198,59 @@ async fn main() -> Result<()> {
                 })
                 .await;
         }
+        Command::DownloadUnknown {
+            submissions,
+            directory,
+        } => {
+            tracing::info!("downloading unknown submissions");
 
+            let (tx, rx) = tokio::sync::mpsc::channel(available_parallelism);
+
+            tokio::task::spawn_blocking(move || {
+                let file = std::fs::File::open(submissions).unwrap();
+                let mut rdr = csv::Reader::from_reader(file);
+                rdr.deserialize::<FileToDownload>()
+                    .for_each(|file| tx.blocking_send(file).unwrap());
+            });
+
+            let (tx, file_paths_rx) = tokio::sync::mpsc::channel(available_parallelism);
+
+            let pool_clone = pool.clone();
+            tokio::task::spawn(async move {
+                let client = reqwest::ClientBuilder::default().build().unwrap();
+                tokio_stream::wrappers::ReceiverStream::new(rx)
+                    .for_each_concurrent(available_parallelism, |file| async {
+                        let file = match file {
+                            Ok(file) => file,
+                            Err(err) => {
+                                tracing::error!("could not parse file: {err}");
+                                return;
+                            }
+                        };
+
+                        let file_id = file.id;
+                        if let Err(err) = download_file(
+                            pool_clone.clone(),
+                            client.clone(),
+                            tx.clone(),
+                            directory.clone(),
+                            file,
+                        )
+                        .await
+                        {
+                            tracing::error!(file_id, "could not download file: {err}");
+                        }
+                    })
+                    .await;
+            });
+
+            process_files(pool.clone(), file_paths_rx, available_parallelism).await;
+
+            sqlx::query_file!("queries/create_assocations_from_downloads.sql")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
         Command::Explore {
             exploration_command:
                 ExplorationCommand::DimensionsImage {
@@ -572,6 +634,7 @@ impl TryFrom<Item> for DbItem {
 }
 
 mod b64_vec {
+    use base64::Engine;
     use serde::{Deserialize, Deserializer};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
@@ -580,8 +643,12 @@ mod b64_vec {
     {
         let b64: Option<String> = Deserialize::deserialize(deserializer)?;
 
-        b64.map(|b64| base64::decode(b64).map_err(serde::de::Error::custom))
-            .transpose()
+        b64.map(|b64| {
+            base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(serde::de::Error::custom)
+        })
+        .transpose()
     }
 }
 
@@ -603,4 +670,91 @@ impl From<RowDimension> for Dimension {
             width: row.width as u32,
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct FileToDownload {
+    id: i32,
+    posted_at: Option<chrono::DateTime<chrono::Utc>>,
+    url: String,
+}
+
+#[tracing::instrument(skip(pool, client, tx, directory, file), fields(submission_id = file.id))]
+async fn download_file(
+    pool: PgPool,
+    client: reqwest::Client,
+    tx: tokio::sync::mpsc::Sender<PathBuf>,
+    directory: PathBuf,
+    file: FileToDownload,
+) -> eyre::Result<()> {
+    if sqlx::query_file_scalar!("queries/has_attempted_download.sql", 1, file.id)
+        .fetch_optional(&pool)
+        .await?
+        .is_some()
+    {
+        tracing::debug!("file already in history");
+        return Ok(());
+    }
+
+    let url = file
+        .url
+        .replace("d.facdn.net", "d.furaffinity.net")
+        .replace("d2.facdn.net", "d.furaffinity.net");
+
+    let data = match client.get(&url).send().await {
+        Ok(data) if data.status().as_u16() == 200 => data,
+        Ok(data) => {
+            tracing::warn!("got bad status code: {}", data.status());
+            sqlx::query_file!("queries/mark_download_unsuccessful.sql", 1, file.id, url)
+                .execute(&pool)
+                .await?;
+            return Ok(());
+        }
+        Err(err) => {
+            tracing::error!("got network error: {err}");
+            sqlx::query_file!("queries/mark_download_unsuccessful.sql", 1, file.id, url)
+                .execute(&pool)
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let body = match data.bytes().await {
+        Ok(body) => body,
+        Err(err) => {
+            tracing::error!("could not ready body: {err}");
+            sqlx::query_file!("queries/mark_download_unsuccessful.sql", 1, file.id, url)
+                .execute(&pool)
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let hash = Sha256::digest(&body);
+    let hash = hex::encode(hash);
+
+    let prefix = directory.join(&hash[0..2]).join(&hash[2..4]);
+    tokio::fs::create_dir_all(&prefix).await?;
+    let path = prefix.join(&hash);
+    if path.exists() {
+        tracing::debug!("file already existed");
+    } else {
+        tracing::debug!("was new file");
+        let mut f = tokio::fs::File::create(&path).await?;
+        f.write_all(&body).await?;
+    }
+
+    sqlx::query_file!(
+        "queries/insert_download_history.sql",
+        1,
+        file.id,
+        file.posted_at,
+        url,
+        hash
+    )
+    .execute(&pool)
+    .await?;
+    tx.send(path).await?;
+
+    Ok(())
 }
