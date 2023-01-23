@@ -10,10 +10,30 @@ use eyre::Result;
 use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 use image::GenericImageView;
+use lazy_static::lazy_static;
+use prometheus::{labels, register_counter, register_histogram, Counter, Histogram};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
+
+lazy_static! {
+    static ref FILE_PROCESSING_TIME: Histogram = register_histogram!(
+        "fuzzysearch_file_index_processing_seconds",
+        "Time to process a file."
+    )
+    .unwrap();
+    static ref FILE_DOWNLOAD_TIME: Histogram = register_histogram!(
+        "fuzzysearch_file_index_download_seconds",
+        "Time to download a file."
+    )
+    .unwrap();
+    static ref FILE_DOWNLOAD_ERRORS: Counter = register_counter!(
+        "fuzzysearch_file_index_download_error_count",
+        "Number of errors when downloading a file."
+    )
+    .unwrap();
+}
 
 const METADATA_VERSION: i32 = 2;
 
@@ -22,9 +42,27 @@ struct Config {
     /// PostgreSQL database URL.
     #[clap(short = 'd', long, env)]
     database_url: String,
+
+    #[clap(flatten)]
+    prometheus: PrometheusConfig,
+
     /// Which function to perform.
     #[clap(subcommand)]
     command: Command,
+}
+
+#[derive(Clone, Debug, Parser)]
+struct PrometheusConfig {
+    /// Prometheus Pushgateway host to use for pushing metrics.
+    #[clap(long, env)]
+    prometheus_host: Option<String>,
+
+    /// Prometheus Pushgateway basic auth username, if needed.
+    #[clap(long, env)]
+    prometheus_username: Option<String>,
+    /// Prometheus Pushgateway basic auth password, if needed.
+    #[clap(long, env)]
+    prometheus_password: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -115,6 +153,17 @@ async fn main() -> Result<()> {
     sqlx::migrate!().run(&pool).await?;
 
     let available_parallelism: usize = std::thread::available_parallelism()?.into();
+
+    if config.prometheus.prometheus_host.is_some() {
+        let config = config.prometheus.clone();
+
+        std::thread::spawn(move || {
+            loop {
+                push_metrics(&config);
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+        });
+    }
 
     match config.command {
         Command::IndexDirectory { directory } => {
@@ -310,6 +359,8 @@ async fn main() -> Result<()> {
         }
     }
 
+    push_metrics(&config.prometheus);
+
     Ok(())
 }
 
@@ -487,6 +538,8 @@ struct ExifEntry {
 
 async fn evaluate_file(path: PathBuf) -> Result<File> {
     tracing::trace!("evaluating {}", path.to_string_lossy());
+
+    let _timer = FILE_PROCESSING_TIME.start_timer();
 
     let mut file = tokio::fs::File::open(&path).await?;
 
@@ -687,12 +740,15 @@ async fn download_file(
     directory: PathBuf,
     file: FileToDownload,
 ) -> eyre::Result<()> {
+    let timer = FILE_DOWNLOAD_TIME.start_timer();
+
     if sqlx::query_file_scalar!("queries/has_attempted_download.sql", 1, file.id)
         .fetch_optional(&pool)
         .await?
         .is_some()
     {
         tracing::debug!("file already in history");
+        timer.stop_and_discard();
         return Ok(());
     }
 
@@ -705,6 +761,7 @@ async fn download_file(
         Ok(data) if data.status().as_u16() == 200 => data,
         Ok(data) => {
             tracing::warn!("got bad status code: {}", data.status());
+            FILE_DOWNLOAD_ERRORS.inc();
             sqlx::query_file!("queries/mark_download_unsuccessful.sql", 1, file.id, url)
                 .execute(&pool)
                 .await?;
@@ -712,6 +769,7 @@ async fn download_file(
         }
         Err(err) => {
             tracing::error!("got network error: {err}");
+            FILE_DOWNLOAD_ERRORS.inc();
             sqlx::query_file!("queries/mark_download_unsuccessful.sql", 1, file.id, url)
                 .execute(&pool)
                 .await?;
@@ -723,6 +781,7 @@ async fn download_file(
         Ok(body) => body,
         Err(err) => {
             tracing::error!("could not ready body: {err}");
+            FILE_DOWNLOAD_ERRORS.inc();
             sqlx::query_file!("queries/mark_download_unsuccessful.sql", 1, file.id, url)
                 .execute(&pool)
                 .await?;
@@ -757,4 +816,27 @@ async fn download_file(
     tx.send(path).await?;
 
     Ok(())
+}
+
+fn push_metrics(config: &PrometheusConfig) {
+    let host = match &config.prometheus_host {
+        Some(host) => host,
+        _ => return,
+    };
+
+    tracing::debug!("pushing metrics");
+
+    let auth = match (
+        config.prometheus_username.clone(),
+        config.prometheus_password.clone(),
+    ) {
+        (Some(username), Some(password)) => {
+            Some(prometheus::BasicAuthentication { username, password })
+        }
+        _ => None,
+    };
+
+    let metrics = prometheus::gather();
+
+    prometheus::push_metrics("fuzzysearch_file_index", labels! {}, host, metrics, auth).unwrap();
 }
