@@ -75,7 +75,7 @@ async fn main() -> eyre::Result<()> {
 
     let app = Router::new()
         .merge(
-            SwaggerUi::new("/swagger-ui/*tail")
+            SwaggerUi::new("/swagger-ui")
                 .url("/api-doc/openapi.json", api::FuzzySearchApi::openapi()),
         )
         .merge(api)

@@ -148,11 +148,8 @@ pub async fn search_image_by_hashes(
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 enum ImageError {
-    #[schema(example = "Image was missing")]
     Missing,
-    #[schema(example = "Image was unknown type")]
     Unknown,
-    #[schema(example = "Image at URL was too large")]
     TooLarge,
 }
 
@@ -231,9 +228,7 @@ pub struct SearchByUrlQuery {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 enum UrlError {
-    #[schema(example = "Image at URL was too large")]
     TooLarge,
-    #[schema(example = "Image at URL was unavailable")]
     Unavailable,
 }
 

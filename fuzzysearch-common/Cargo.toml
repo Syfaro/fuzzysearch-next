@@ -9,6 +9,6 @@ authors = ["Syfaro <syfaro@huefox.com>"]
 "api-types" = ["utoipa"]
 
 [dependencies]
-serde = { version = "1.0.144", features = ["derive"] }
-chrono = { version = "0.4.22", features = ["serde"] }
-utoipa = { version = "2.0.1", optional = true }
+serde = { version = "1.0.152", features = ["derive"] }
+chrono = { version = "0.4.23", features = ["serde"] }
+utoipa = { version = "2.4.2", optional = true }
