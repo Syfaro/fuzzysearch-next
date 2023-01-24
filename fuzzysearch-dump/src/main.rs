@@ -37,12 +37,16 @@ mod artist {
 }
 
 mod b64_vec {
+    use base64::Engine;
+
     pub fn serialize<S>(bytes: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         match bytes {
-            Some(bytes) => serializer.serialize_str(&base64::encode(bytes)),
+            Some(bytes) => {
+                serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
+            }
             None => serializer.serialize_none(),
         }
     }
