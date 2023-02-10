@@ -48,8 +48,11 @@ impl std::str::FromStr for Rating {
 #[allow(dead_code)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
 pub struct Image {
+    /// Image to search.
     #[cfg_attr(feature = "api-types", schema(value_type = String, format = Binary))]
     pub image: Vec<u8>,
+    /// Maximum distance for search results.
+    pub distance: Option<u64>,
 }
 
 /// Site-specific information.

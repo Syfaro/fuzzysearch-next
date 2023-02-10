@@ -87,6 +87,7 @@ pub struct HandleQuery {
         HandleQuery,
     )
 )]
+#[tracing::instrument(err, skip_all, fields(handle = query.handle))]
 pub async fn check_handle(
     Extension(pool): Extension<PgPool>,
     Path(service): Path<Service>,
@@ -100,13 +101,18 @@ pub async fn check_handle(
         }
     };
 
+    tracing::debug!(exists, "checked handle");
+
     Ok((StatusCode::OK, Json(exists.unwrap_or(false))))
 }
 
 #[derive(Debug, Serialize, Deserialize, IntoParams)]
 pub struct HashesQuery {
     /// Hashes to search for, comma separated.
+    #[serde(alias = "hashes")]
     hash: String,
+    /// Maximum distance for search results.
+    distance: Option<u64>,
 }
 
 /// Search for images by hashes.
@@ -125,7 +131,7 @@ pub struct HashesQuery {
         HashesQuery,
     )
 )]
-#[axum::debug_handler]
+#[tracing::instrument(err, skip_all, fields(hash = query.hash, distance = query.distance))]
 pub async fn search_image_by_hashes(
     Extension(pool): Extension<PgPool>,
     Extension(bkapi): Extension<BKApiClient>,
@@ -140,7 +146,8 @@ pub async fn search_image_by_hashes(
 
     let headers = rate_limit!(&pool, api_key, &[("image", hashes.len() as i16)]);
 
-    let found_images = db::lookup_hashes(&bkapi, &pool, &hashes, 3).await?;
+    let found_images =
+        db::lookup_hashes(&bkapi, &pool, &hashes, query.distance.unwrap_or(3)).await?;
 
     Ok((StatusCode::OK, headers, Json(found_images)).into_response())
 }
@@ -168,6 +175,7 @@ enum ImageError {
         ("api_key" = [])
     )
 )]
+#[tracing::instrument(err, skip_all)]
 pub async fn search_image_by_upload(
     Extension(pool): Extension<PgPool>,
     Extension(bkapi): Extension<BKApiClient>,
@@ -177,12 +185,25 @@ pub async fn search_image_by_upload(
     const MAX_UPLOAD_SIZE: usize = 25_000_000;
 
     let mut hashes = Vec::new();
+    let mut distance = 3;
 
     while let Some(mut field) = multipart.next_field().await? {
-        if field.name() != Some("image") {
-            continue;
+        match field.name() {
+            Some("distance") => {
+                let text = field.text().await.ok();
+                if let Some(val) = text.as_deref().and_then(|val| val.parse().ok()) {
+                    distance = val;
+                } else {
+                    tracing::warn!(value = text, "ignoring incorrect distance value");
+                }
+                continue;
+            }
+            Some("image") => tracing::debug!("found image field"),
+            field => {
+                tracing::warn!(field, "got unknown field");
+                continue;
+            }
         }
-        tracing::debug!("found image field");
 
         let mut buf = bytes::BytesMut::new();
         while let Some(chunk) = field.chunk().await? {
@@ -215,7 +236,7 @@ pub async fn search_image_by_upload(
     );
 
     tracing::debug!(count = hashes.len(), "hashed images in request");
-    let found_images = db::lookup_hashes(&bkapi, &pool, &hashes, 3).await?;
+    let found_images = db::lookup_hashes(&bkapi, &pool, &hashes, distance).await?;
 
     Ok((StatusCode::OK, headers, Json(found_images)).into_response())
 }
@@ -249,6 +270,7 @@ enum UrlError {
         ("api_key" = [])
     )
 )]
+#[tracing::instrument(err, skip_all)]
 pub async fn search_image_by_url(
     Extension(pool): Extension<PgPool>,
     Extension(bkapi): Extension<BKApiClient>,
@@ -288,10 +310,10 @@ pub async fn search_image_by_url(
                 .ok()
         })
         .unwrap_or(0);
+    tracing::trace!(content_length, "got image content_length");
     if content_length > MAX_DOWNLOAD_SIZE {
         return Ok((StatusCode::BAD_REQUEST, headers, Json(UrlError::TooLarge)).into_response());
     }
-    tracing::trace!(content_length, "got image content_length");
 
     let mut buf = bytes::BytesMut::with_capacity(content_length);
     while let Some(chunk) = resp.chunk().await.wrap_err("Could not fetch image chunk")? {
@@ -343,6 +365,7 @@ pub struct FurAffinityFileQuery {
         ("api_key" = [])
     )
 )]
+#[tracing::instrument(err, skip_all)]
 pub async fn lookup_furaffinity_file(
     Extension(pool): Extension<PgPool>,
     Extension(api_key): Extension<db::UserApiKey>,
@@ -397,6 +420,7 @@ pub async fn lookup_furaffinity_file(
         (status = 200, description = "File lookup completed successfully", body = String),
     ),
 )]
+#[tracing::instrument(err, skip_all)]
 pub async fn dump_latest(
     Extension(pool): Extension<PgPool>,
 ) -> Result<impl IntoResponse, ReportError> {

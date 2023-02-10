@@ -1,11 +1,12 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{fmt::Display, net::SocketAddr, time::Duration};
 
 use axum::{
     http::{header::HeaderName, Method, StatusCode},
     middleware,
-    response::IntoResponse,
+    response::{IntoResponse, Redirect},
     routing, Extension, Router, Server,
 };
+use axum_tracing_opentelemetry::opentelemetry_tracing_layer;
 use bkapi_client::BKApiClient;
 use clap::Parser;
 use eyre::Report;
@@ -27,14 +28,27 @@ struct Config {
     bkapi_endpoint: String,
     #[clap(long, env)]
     database_url: String,
+
+    #[clap(long, env)]
+    metrics_host: SocketAddr,
+    #[clap(long, env)]
+    json_logs: bool,
 }
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt::init();
 
     let config = Config::parse();
+
+    foxlib::trace::init(foxlib::trace::TracingConfig {
+        namespace: "fuzzysearch-next",
+        name: "fuzzysearch-api",
+        version: env!("CARGO_PKG_VERSION"),
+        otlp: config.json_logs,
+    });
+
+    foxlib::MetricsServer::serve(config.metrics_host, true).await;
 
     let bkapi = BKApiClient::new(config.bkapi_endpoint);
     let pool = PgPool::connect(&config.database_url).await?;
@@ -74,12 +88,14 @@ async fn main() -> eyre::Result<()> {
         .layer(TraceLayer::new_for_http());
 
     let app = Router::new()
+        .route("/", routing::get(|| async { Redirect::to("/swagger-ui") }))
         .merge(
             SwaggerUi::new("/swagger-ui")
                 .url("/api-doc/openapi.json", api::FuzzySearchApi::openapi()),
         )
         .merge(api)
-        .layer(app_layer);
+        .layer(app_layer)
+        .layer(opentelemetry_tracing_layer());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!("starting on {}", addr);
@@ -90,6 +106,12 @@ async fn main() -> eyre::Result<()> {
 }
 
 pub struct ReportError(Report);
+
+impl Display for ReportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 impl<R> From<R> for ReportError
 where
@@ -110,22 +132,12 @@ impl IntoResponse for ReportError {
     }
 }
 
-fn get_hasher() -> img_hash::Hasher<[u8; 8]> {
-    img_hash::HasherConfig::with_bytes_type::<[u8; 8]>()
-        .hash_alg(img_hash::HashAlg::Gradient)
-        .hash_size(8, 8)
-        .preproc_dct()
-        .to_hasher()
-}
-
 async fn hash_image(buf: bytes::Bytes) -> eyre::Result<i64> {
     let hash = tokio::task::spawn_blocking(move || -> eyre::Result<i64> {
-        let im = image::load_from_memory(&buf)?;
-        let hash = get_hasher().hash_image(&im);
+        let im = foxlib::hash::image::load_from_memory(&buf)?;
+        let hash = foxlib::hash::ImageHasher::default().hash_image(&im);
 
-        let bytes: [u8; 8] = hash.as_bytes().try_into()?;
-
-        Ok(i64::from_be_bytes(bytes))
+        Ok(hash.into())
     })
     .await??;
 

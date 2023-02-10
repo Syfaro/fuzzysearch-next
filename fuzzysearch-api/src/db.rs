@@ -7,11 +7,55 @@ use axum::{
 };
 use bkapi_client::BKApiClient;
 use eyre::Context;
+use lazy_static::lazy_static;
+use prometheus::{
+    register_histogram, register_int_counter, register_int_counter_vec, Histogram, IntCounter,
+    IntCounterVec,
+};
 use reqwest::header::HeaderName;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use fuzzysearch_common::*;
+
+lazy_static! {
+    static ref BKAPI_TIME: Histogram = register_histogram!(
+        "fuzzysearch_bkapi_request_seconds",
+        "Amount of time to complete a BKApi request."
+    )
+    .unwrap();
+    static ref DATABASE_TIME: Histogram = register_histogram!(
+        "fuzzysearch_database_seconds",
+        "Amount of time to lookup hashes."
+    )
+    .unwrap();
+    static ref RATE_LIMIT_COUNT: IntCounterVec = register_int_counter_vec!(
+        "fuzzysearch_rate_limit_count",
+        "Number of requests for each bucket type.",
+        &["bucket"]
+    )
+    .unwrap();
+    static ref RATE_LIMITED_REQUEST_COUNT: IntCounter = register_int_counter!(
+        "fuzzysearch_rate_limited_request_count",
+        "Number of requests that exceeded a rate limit."
+    )
+    .unwrap();
+    static ref HASH_SEARCH_RESULTS: IntCounter = register_int_counter!(
+        "fuzzysearch_hash_search_count",
+        "Total number of resulting images."
+    )
+    .unwrap();
+    static ref GOOD_HASH_SEARCH_RESULTS: IntCounter = register_int_counter!(
+        "fuzzysearch_hash_search_good_count",
+        "Total number of good resulting images."
+    )
+    .unwrap();
+    static ref NO_HASH_SEARCH_RESULTS: IntCounter = register_int_counter!(
+        "fuzzysearch_hash_search_none_count",
+        "Total number of no resulting images."
+    )
+    .unwrap();
+}
 
 #[derive(Clone)]
 pub struct UserApiKey {
@@ -107,6 +151,7 @@ impl RateLimitBucketsHeaders for Vec<RateLimitBucket> {
 }
 
 impl UserApiKey {
+    #[tracing::instrument(err, skip_all, fields(api_key_id = self.id))]
     pub async fn rate_limit(
         &self,
         pool: &PgPool,
@@ -123,6 +168,12 @@ impl UserApiKey {
                 count: bucket.1,
             })
             .collect();
+
+        bucket_counts.iter().for_each(|bucket| {
+            RATE_LIMIT_COUNT
+                .with_label_values(&[bucket.bucket])
+                .inc_by(bucket.count as u64);
+        });
 
         let allowed_buckets = self.buckets();
 
@@ -161,6 +212,9 @@ impl UserApiKey {
             .any(|bucket| bucket.used > bucket.allowed);
 
         tracing::debug!(over_limit, "applied rate limit");
+        if over_limit {
+            RATE_LIMITED_REQUEST_COUNT.inc();
+        }
 
         Ok((over_limit, applied_limits))
     }
@@ -279,6 +333,7 @@ impl From<DbResult> for SearchResult {
     }
 }
 
+#[tracing::instrument(err, skip(bkapi, pool))]
 pub async fn lookup_hashes(
     bkapi: &BKApiClient,
     pool: &PgPool,
@@ -287,8 +342,12 @@ pub async fn lookup_hashes(
 ) -> eyre::Result<Vec<SearchResult>> {
     tracing::debug!(distance, "starting lookup for hashes: {:?}", hashes);
 
+    let bkapi_timer = BKAPI_TIME.start_timer();
     let related_hashes = bkapi.search_many(hashes, distance).await?;
-    tracing::trace!("got results from bkapi");
+    tracing::trace!(
+        duration = bkapi_timer.stop_and_record(),
+        "got results from bkapi"
+    );
 
     let search: Vec<_> = related_hashes
         .into_iter()
@@ -304,6 +363,7 @@ pub async fn lookup_hashes(
         .collect();
     tracing::trace!(count = search.len(), "looking up discovered hashes");
 
+    let database_timer = DATABASE_TIME.start_timer();
     let results = sqlx::query_file_as!(
         DbResult,
         "queries/lookup_hashes.sql",
@@ -312,11 +372,28 @@ pub async fn lookup_hashes(
     .map(SearchResult::from)
     .fetch_all(pool)
     .await?;
-    tracing::trace!(count = results.len(), "found hashes");
+    tracing::trace!(
+        duration = database_timer.stop_and_record(),
+        count = results.len(),
+        "found hashes"
+    );
+
+    HASH_SEARCH_RESULTS.inc_by(results.len() as u64);
+    GOOD_HASH_SEARCH_RESULTS.inc_by(
+        results
+            .iter()
+            .filter_map(|result| Some(result.distance? <= 3))
+            .count() as u64,
+    );
+
+    if results.is_empty() {
+        NO_HASH_SEARCH_RESULTS.inc();
+    }
 
     Ok(results)
 }
 
+#[tracing::instrument(err, skip(pool))]
 pub async fn lookup_furaffinity_file(
     pool: &PgPool,
     file: &str,
@@ -333,6 +410,7 @@ pub async fn lookup_furaffinity_file(
     Ok(results)
 }
 
+#[tracing::instrument(err, skip(pool))]
 pub async fn lookup_furaffinity_id(pool: &PgPool, id: i32) -> eyre::Result<Vec<FurAffinityFile>> {
     let results = sqlx::query_file_as!(DbFurAffinityFile, "queries/lookup_furaffinity_id.sql", id)
         .map(FurAffinityFile::from)

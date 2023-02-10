@@ -11,4 +11,4 @@ authors = ["Syfaro <syfaro@huefox.com>"]
 [dependencies]
 serde = { version = "1.0.152", features = ["derive"] }
 chrono = { version = "0.4.23", features = ["serde"] }
-utoipa = { version = "2.4.2", optional = true }
+utoipa = { version = "3.0.2", optional = true }
