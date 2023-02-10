@@ -20,38 +20,38 @@ use fuzzysearch_common::*;
 
 lazy_static! {
     static ref BKAPI_TIME: Histogram = register_histogram!(
-        "fuzzysearch_bkapi_request_seconds",
+        "fuzzysearch_api_bkapi_request_seconds",
         "Amount of time to complete a BKApi request."
     )
     .unwrap();
     static ref DATABASE_TIME: Histogram = register_histogram!(
-        "fuzzysearch_database_seconds",
+        "fuzzysearch_api_database_seconds",
         "Amount of time to lookup hashes."
     )
     .unwrap();
     static ref RATE_LIMIT_COUNT: IntCounterVec = register_int_counter_vec!(
-        "fuzzysearch_rate_limit_count",
+        "fuzzysearch_api_rate_limit_count",
         "Number of requests for each bucket type.",
         &["bucket"]
     )
     .unwrap();
     static ref RATE_LIMITED_REQUEST_COUNT: IntCounter = register_int_counter!(
-        "fuzzysearch_rate_limited_request_count",
+        "fuzzysearch_api_rate_limited_request_count",
         "Number of requests that exceeded a rate limit."
     )
     .unwrap();
     static ref HASH_SEARCH_RESULTS: IntCounter = register_int_counter!(
-        "fuzzysearch_hash_search_count",
+        "fuzzysearch_api_hash_search_count",
         "Total number of resulting images."
     )
     .unwrap();
     static ref GOOD_HASH_SEARCH_RESULTS: IntCounter = register_int_counter!(
-        "fuzzysearch_hash_search_good_count",
+        "fuzzysearch_api_hash_search_good_count",
         "Total number of good resulting images."
     )
     .unwrap();
     static ref NO_HASH_SEARCH_RESULTS: IntCounter = register_int_counter!(
-        "fuzzysearch_hash_search_none_count",
+        "fuzzysearch_api_hash_search_none_count",
         "Total number of no resulting images."
     )
     .unwrap();

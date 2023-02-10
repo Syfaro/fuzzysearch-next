@@ -10,6 +10,8 @@ use axum_tracing_opentelemetry::opentelemetry_tracing_layer;
 use bkapi_client::BKApiClient;
 use clap::Parser;
 use eyre::Report;
+use lazy_static::lazy_static;
+use prometheus::{register_histogram, Histogram};
 use sqlx::PgPool;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -21,6 +23,19 @@ use utoipa_swagger_ui::SwaggerUi;
 
 mod api;
 mod db;
+
+lazy_static! {
+    static ref IMAGE_LOAD: Histogram = register_histogram!(
+        "fuzzysearch_api_image_load_seconds",
+        "Amount of time to load an image."
+    )
+    .unwrap();
+    static ref IMAGE_HASH: Histogram = register_histogram!(
+        "fuzzysearch_api_image_hash_seconds",
+        "Amount of time to hash an image."
+    )
+    .unwrap();
+}
 
 #[derive(clap::Parser)]
 struct Config {
@@ -133,9 +148,18 @@ impl IntoResponse for ReportError {
 }
 
 async fn hash_image(buf: bytes::Bytes) -> eyre::Result<i64> {
+    let span = tracing::info_span!("hash_image");
+
     let hash = tokio::task::spawn_blocking(move || -> eyre::Result<i64> {
+        let _enter = span.entered();
+
+        let load_timer = IMAGE_LOAD.start_timer();
         let im = foxlib::hash::image::load_from_memory(&buf)?;
+        tracing::debug!(duration = load_timer.stop_and_record(), "loaded image");
+
+        let hash_timer = IMAGE_HASH.start_timer();
         let hash = foxlib::hash::ImageHasher::default().hash_image(&im);
+        tracing::debug!(duration = hash_timer.stop_and_record(), "hashed image");
 
         Ok(hash.into())
     })
