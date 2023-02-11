@@ -157,11 +157,9 @@ async fn main() -> Result<()> {
     if config.prometheus.prometheus_host.is_some() {
         let config = config.prometheus.clone();
 
-        std::thread::spawn(move || {
-            loop {
-                push_metrics(&config);
-                std::thread::sleep(std::time::Duration::from_secs(10));
-            }
+        std::thread::spawn(move || loop {
+            push_metrics(&config);
+            std::thread::sleep(std::time::Duration::from_secs(10));
         });
     }
 
