@@ -19,5 +19,9 @@ jobs:
         run: |
           cargo fmt -- --check
           cargo clippy -- -D warnings
+        env:
+          FUZZYSEARCH_API_TOKEN: ${{ secrets.FUZZYSEARCH_API_TOKEN }}
       - name: Test
         run: cargo test --all-features
+        env:
+          FUZZYSEARCH_API_TOKEN: ${{ secrets.FUZZYSEARCH_API_TOKEN }}
