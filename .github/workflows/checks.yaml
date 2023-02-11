@@ -17,11 +17,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Lint
         run: |
+          echo "FUZZYSEARCH_API_TOKEN=$FUZZYSEARCH_API_TOKEN" > .env
           cargo fmt -- --check
           cargo clippy -- -D warnings
         env:
           FUZZYSEARCH_API_TOKEN: ${{ secrets.FUZZYSEARCH_API_TOKEN }}
       - name: Test
-        run: cargo test --all-features
+        run: |
+          echo "FUZZYSEARCH_API_TOKEN=$FUZZYSEARCH_API_TOKEN" > .env
+          cargo test --all-features
         env:
           FUZZYSEARCH_API_TOKEN: ${{ secrets.FUZZYSEARCH_API_TOKEN }}
