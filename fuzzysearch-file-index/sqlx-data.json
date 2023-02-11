@@ -1,0 +1,159 @@
+{
+  "db": "PostgreSQL",
+  "07de6897c910ac7ebd4eeb8803456054aa32195788778bf1ebe2f5007fad1559": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "INSERT INTO\n    file_association\nSELECT\n    download_history.hash,\n    download_history.site_id,\n    download_history.submission_id,\n    download_history.posted_at\nFROM\n    download_history\n    JOIN file ON file.hash = download_history.hash\n    LEFT JOIN file_association ON download_history.site_id = file_association.site_id\n    AND download_history.submission_id::text = file_association.submission_id\nWHERE\n    file_association.submission_id IS NULL ON CONFLICT DO nothing;\n"
+  },
+  "424fb482efcd69fa8fa06ba0dcbff80353cd0c4c50e577f08303fdd09e4e0b61": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int4",
+          "Text"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    download_history (site_id, submission_id, url, successful)\nVALUES\n    ($1, $2, $3, false);\n"
+  },
+  "589ac8fb28ac0985ede34763821526141a61cad71c9fa7d03c56da6ff7fcb622": {
+    "describe": {
+      "columns": [
+        {
+          "name": "height!",
+          "ordinal": 0,
+          "type_info": "Int4"
+        },
+        {
+          "name": "width!",
+          "ordinal": 1,
+          "type_info": "Int4"
+        }
+      ],
+      "nullable": [
+        true,
+        true
+      ],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "SELECT height \"height!\", width \"width!\"\n    FROM file\n    WHERE height IS NOT NULL AND width IS NOT NULL;\n"
+  },
+  "90f81d21c6dc4235b51ea33f7f3dabe35b29c15557ad9928f3306368895eb93f": {
+    "describe": {
+      "columns": [
+        {
+          "name": "height!",
+          "ordinal": 0,
+          "type_info": "Int4"
+        },
+        {
+          "name": "width!",
+          "ordinal": 1,
+          "type_info": "Int4"
+        }
+      ],
+      "nullable": [
+        true,
+        true
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      }
+    },
+    "query": "SELECT height \"height!\", width \"width!\"\n    FROM file\n    JOIN file_association ON file_association.hash = file.hash\n    WHERE height IS NOT NULL AND width IS NOT NULL AND file_association.site_id = $1;\n"
+  },
+  "99ede63cf03be2c893cd7c58fcfd83f71125c46e0e2038920a5eaabee3921644": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int4",
+          "Timestamptz",
+          "Text",
+          "Text"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    download_history (\n        site_id,\n        submission_id,\n        posted_at,\n        url,\n        successful,\n        hash\n    )\nVALUES\n    ($1, $2, $3, $4, true, decode($5, 'hex'));\n"
+  },
+  "b2f83f0e942d45f4864753f76128cdbb59a72c780cc4593dc131b1cd9bc95b4a": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Json"
+        ]
+      }
+    },
+    "query": "INSERT INTO file (hash, size, height, width, mime_type, metadata_version, exif_entries)\n    SELECT decode(item.hash, 'hex'), size, height, width, mime_type, metadata_version, exif_entries\n        FROM json_to_recordset($1::json) AS item(hash text, size integer, height integer, width integer, mime_type text, metadata_version integer, exif_entries jsonb)\n    ON CONFLICT (hash) DO UPDATE SET\n        size = EXCLUDED.size,\n        height = EXCLUDED.height,\n        width = EXCLUDED.width,\n        mime_type = EXCLUDED.mime_type,\n        metadata_version = EXCLUDED.metadata_version,\n        exif_entries = EXCLUDED.exif_entries;\n"
+  },
+  "bbff90f7a9cb465c032dab76c1981febf24f1af73459fbcdfb0c4f3d43b8affa": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Json"
+        ]
+      }
+    },
+    "query": "INSERT INTO file_association (hash, site_id, submission_id, posted_at)\n    SELECT decode(item.hash, 'hex'), site_id, submission_id, posted_at\n        FROM json_to_recordset($1::json) AS item(hash text, site_id integer, submission_id text, posted_at timestamp with time zone)\n        WHERE exists(SELECT 1 FROM file WHERE file.hash = decode(item.hash, 'hex'))\n    ON CONFLICT DO NOTHING;\n"
+  },
+  "f1778f961096ebda5fa26aa95587ed960338cefab9532ccc0ef13dcf3b1cffed": {
+    "describe": {
+      "columns": [
+        {
+          "name": "hash",
+          "ordinal": 0,
+          "type_info": "Bytea"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "ByteaArray"
+        ]
+      }
+    },
+    "query": "SELECT\n    hash\nFROM\n    file\nWHERE\n    metadata_version >= $1\n    AND hash = any($2);\n"
+  },
+  "fcc15ec2478d160393a8112e46bb4cfb35037cfd1bbbd559316d5df405d23e90": {
+    "describe": {
+      "columns": [
+        {
+          "name": "one",
+          "ordinal": 0,
+          "type_info": "Int4"
+        }
+      ],
+      "nullable": [
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int4"
+        ]
+      }
+    },
+    "query": "SELECT\n    1 one\nFROM\n    download_history\nWHERE\n    site_id = $1\n    and submission_id = $2;\n"
+  }
+}

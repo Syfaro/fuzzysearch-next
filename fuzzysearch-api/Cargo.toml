@@ -1,9 +1,10 @@
 [package]
 name = "fuzzysearch-api"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Syfaro <syfaro@huefox.com>"]
+publish = false
 
 [dependencies]
 axum = { version = "0.6.3", features = ["multipart", "macros"] }

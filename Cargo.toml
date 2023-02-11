@@ -6,3 +6,6 @@ members = [
     "fuzzysearch-dump",
     "fuzzysearch-web"
 ]
+
+[workspace.metadata.release]
+sign-tag = true

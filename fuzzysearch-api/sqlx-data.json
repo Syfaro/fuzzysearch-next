@@ -1,0 +1,395 @@
+{
+  "db": "PostgreSQL",
+  "1f8ab11713fafb376d51e8077e3f626347c54723aef7e0d022549fec1c2e9bad": {
+    "describe": {
+      "columns": [
+        {
+          "name": "url",
+          "ordinal": 0,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "SELECT\n    url\nFROM\n    dump\nORDER BY\n    created_at DESC\nLIMIT\n    1;\n"
+  },
+  "6f7e2f045cad26b8312cb23c562c421ef7e642d998c24ab7304d3f0c6dec84d7": {
+    "describe": {
+      "columns": [
+        {
+          "name": "exists",
+          "ordinal": 0,
+          "type_info": "Bool"
+        }
+      ],
+      "nullable": [
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "SELECT exists(\n    SELECT 1 FROM twitter_user WHERE lower(data->>'screen_name') = lower($1));\n"
+  },
+  "7e141155b7ca150b78e4ff31eaa56b4784b54e695eb42d32509c34fd23ef7f94": {
+    "describe": {
+      "columns": [
+        {
+          "name": "site!",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "id!",
+          "ordinal": 1,
+          "type_info": "Int8"
+        },
+        {
+          "name": "hash!",
+          "ordinal": 2,
+          "type_info": "Int8"
+        },
+        {
+          "name": "url",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "filename",
+          "ordinal": 4,
+          "type_info": "Text"
+        },
+        {
+          "name": "artists",
+          "ordinal": 5,
+          "type_info": "TextArray"
+        },
+        {
+          "name": "file_id",
+          "ordinal": 6,
+          "type_info": "Int4"
+        },
+        {
+          "name": "sources",
+          "ordinal": 7,
+          "type_info": "TextArray"
+        },
+        {
+          "name": "rating",
+          "ordinal": 8,
+          "type_info": "Bpchar"
+        },
+        {
+          "name": "posted_at",
+          "ordinal": 9,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "searched_hash!",
+          "ordinal": 10,
+          "type_info": "Int8"
+        },
+        {
+          "name": "distance!",
+          "ordinal": 11,
+          "type_info": "Int8"
+        },
+        {
+          "name": "sha256",
+          "ordinal": 12,
+          "type_info": "Bytea"
+        }
+      ],
+      "nullable": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Json"
+        ]
+      }
+    },
+    "query": "WITH hashes AS (\n    SELECT * FROM json_to_recordset($1::json)\n        AS hashes (searched_hash bigint, found_hash bigint, distance bigint)\n)\nSELECT\n    'FurAffinity' \"site!\",\n    submission.id \"id!\",\n    submission.hash_int \"hash!\",\n    submission.url,\n    submission.filename,\n    ARRAY(SELECT artist.name) artists,\n    submission.file_id,\n    null sources,\n    submission.rating,\n    submission.posted_at,\n    hashes.searched_hash \"searched_hash!\",\n    hashes.distance \"distance!\",\n    submission.file_sha256 sha256\nFROM hashes\nJOIN submission ON hashes.found_hash = submission.hash_int\nJOIN artist ON submission.artist_id = artist.id\nWHERE hash_int IN (SELECT hashes.found_hash)\nUNION ALL\nSELECT\n    'e621' site,\n    e621.id,\n    e621.hash,\n    e621.data->'file'->>'url' url,\n    (e621.data->'file'->>'md5') || '.' || (e621.data->'file'->>'ext') filename,\n    ARRAY(SELECT jsonb_array_elements_text(e621.data->'tags'->'artist')) artists,\n    null file_id,\n    ARRAY(SELECT jsonb_array_elements_text(e621.data->'sources')) sources,\n    e621.data->>'rating' rating,\n    to_timestamp(data->>'created_at', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') posted_at,\n    hashes.searched_hash,\n    hashes.distance,\n    e621.sha256\nFROM hashes\nJOIN e621 ON hashes.found_hash = e621.hash\nWHERE e621.hash IN (SELECT hashes.found_hash)\nUNION ALL\nSELECT\n    'Weasyl' site,\n    weasyl.id,\n    weasyl.hash,\n    weasyl.data->>'link' url,\n    null filename,\n    ARRAY(SELECT weasyl.data->>'owner_login') artists,\n    null file_id,\n    null sources,\n    weasyl.data->>'rating' rating,\n    to_timestamp(data->>'posted_at', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') posted_at,\n    hashes.searched_hash,\n    hashes.distance,\n    weasyl.sha256\nFROM hashes\nJOIN weasyl ON hashes.found_hash = weasyl.hash\nWHERE weasyl.hash IN (SELECT hashes.found_hash)\nUNION ALL\nSELECT\n    'Twitter' site,\n    tweet.id,\n    tweet_media.hash,\n    tweet_media.url,\n    null filename,\n    ARRAY(SELECT tweet.data->'user'->>'screen_name') artists,\n    null file_id,\n    null sources,\n    CASE\n        WHEN (tweet.data->'possibly_sensitive')::boolean IS true THEN 'adult'\n        WHEN (tweet.data->'possibly_sensitive')::boolean IS false THEN 'general'\n    END rating,\n    to_timestamp(tweet.data->>'created_at', 'DY Mon DD HH24:MI:SS +0000 YYYY') posted_at,\n    hashes.searched_hash,\n    hashes.distance,\n    null sha256\nFROM hashes\nJOIN tweet_media ON hashes.found_hash = tweet_media.hash\nJOIN tweet ON tweet_media.tweet_id = tweet.id\nWHERE tweet_media.hash IN (SELECT hashes.found_hash);\n"
+  },
+  "950cac871f25a689bf827e541d517a92c4f572f3db4ea8881fcc07e3b43054fb": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int4"
+        },
+        {
+          "name": "file_id",
+          "ordinal": 1,
+          "type_info": "Int4"
+        },
+        {
+          "name": "artist?",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "hash",
+          "ordinal": 3,
+          "type_info": "Int8"
+        },
+        {
+          "name": "url",
+          "ordinal": 4,
+          "type_info": "Text"
+        },
+        {
+          "name": "filename",
+          "ordinal": 5,
+          "type_info": "Text"
+        },
+        {
+          "name": "rating",
+          "ordinal": 6,
+          "type_info": "Bpchar"
+        },
+        {
+          "name": "posted_at",
+          "ordinal": 7,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "file_size",
+          "ordinal": 8,
+          "type_info": "Int4"
+        },
+        {
+          "name": "sha256",
+          "ordinal": 9,
+          "type_info": "Bytea"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 10,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "deleted",
+          "ordinal": 11,
+          "type_info": "Bool"
+        },
+        {
+          "name": "tags",
+          "ordinal": 12,
+          "type_info": "TextArray"
+        }
+      ],
+      "nullable": [
+        false,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "SELECT\n    submission.id,\n    file_id,\n    artist.name \"artist?\",\n    submission.hash_int hash,\n    submission.url,\n    submission.filename,\n    submission.rating,\n    submission.posted_at,\n    submission.file_size,\n    submission.file_sha256 \"sha256\",\n    submission.updated_at,\n    submission.deleted,\n    ARRAY(\n        SELECT\n            tag.name\n        FROM\n            tag_to_post\n            JOIN tag ON tag.id = tag_to_post.tag_id\n        WHERE\n            tag_to_post.post_id = submission.id\n    ) tags\nFROM\n    submission\n    LEFT JOIN artist ON artist.id = submission.artist_id\nWHERE\n    lower(submission.filename) = lower($1);\n"
+  },
+  "ba09ca7c657aadfafd967c55d26625b4d4ab1affe13b69dbafbf37c2c507df75": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int4"
+        },
+        {
+          "name": "file_id",
+          "ordinal": 1,
+          "type_info": "Int4"
+        },
+        {
+          "name": "artist?",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "hash",
+          "ordinal": 3,
+          "type_info": "Int8"
+        },
+        {
+          "name": "url",
+          "ordinal": 4,
+          "type_info": "Text"
+        },
+        {
+          "name": "filename",
+          "ordinal": 5,
+          "type_info": "Text"
+        },
+        {
+          "name": "rating",
+          "ordinal": 6,
+          "type_info": "Bpchar"
+        },
+        {
+          "name": "posted_at",
+          "ordinal": 7,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "file_size",
+          "ordinal": 8,
+          "type_info": "Int4"
+        },
+        {
+          "name": "sha256",
+          "ordinal": 9,
+          "type_info": "Bytea"
+        },
+        {
+          "name": "updated_at",
+          "ordinal": 10,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "deleted",
+          "ordinal": 11,
+          "type_info": "Bool"
+        },
+        {
+          "name": "tags",
+          "ordinal": 12,
+          "type_info": "TextArray"
+        }
+      ],
+      "nullable": [
+        false,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      }
+    },
+    "query": "SELECT\n    submission.id,\n    file_id,\n    artist.name \"artist?\",\n    submission.hash_int hash,\n    submission.url,\n    submission.filename,\n    submission.rating,\n    submission.posted_at,\n    submission.file_size,\n    submission.file_sha256 \"sha256\",\n    submission.updated_at,\n    submission.deleted,\n    ARRAY(\n        SELECT\n            tag.name\n        FROM\n            tag_to_post\n            JOIN tag ON tag.id = tag_to_post.tag_id\n        WHERE\n            tag_to_post.post_id = submission.id\n    ) tags\nFROM submission\nLEFT JOIN artist\n    ON artist.id = submission.artist_id\nWHERE\n    submission.id = $1\n    OR submission.file_id = $1;\n"
+  },
+  "e970f8f28759679afcfc963c26b577e3dab219b3d190b594a63ebfbcbb078763": {
+    "describe": {
+      "columns": [
+        {
+          "name": "group_name",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "count",
+          "ordinal": 1,
+          "type_info": "Int2"
+        }
+      ],
+      "nullable": [
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int4",
+          "Int8",
+          "Json"
+        ]
+      }
+    },
+    "query": "WITH requested_bucket AS (\n\tSELECT * FROM json_to_recordset($3::json)\n\t\tAS requested_bucket (bucket text, count integer)\n)\nINSERT INTO rate_limit (api_key_id, time_window, group_name, count)\n\tSELECT $1, $2, requested_bucket.bucket, requested_bucket.count FROM requested_bucket\n\tON CONFLICT ON CONSTRAINT unique_window DO UPDATE SET count = rate_limit.count + EXCLUDED.count\n\tRETURNING rate_limit.group_name, rate_limit.count;\n"
+  },
+  "eafcce2044e11749f09a0bb3460f627e31c3363c9d492b40d9b0c2a7a3a9bb33": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int4"
+        },
+        {
+          "name": "user_id",
+          "ordinal": 1,
+          "type_info": "Int4"
+        },
+        {
+          "name": "name",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "name_limit",
+          "ordinal": 3,
+          "type_info": "Int2"
+        },
+        {
+          "name": "image_limit",
+          "ordinal": 4,
+          "type_info": "Int2"
+        },
+        {
+          "name": "hash_limit",
+          "ordinal": 5,
+          "type_info": "Int2"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        true,
+        false,
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "SELECT id, user_id, name, name_limit, image_limit, hash_limit FROM api_key WHERE key = $1;\n"
+  }
+}
