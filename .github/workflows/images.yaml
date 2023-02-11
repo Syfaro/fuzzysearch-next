@@ -1,3 +1,5 @@
+name: Images
+
 on:
   push:
     tags:
@@ -15,13 +17,15 @@ jobs:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get install protobuf-compiler
-      - uses: Swatinem/rust-cache@v2
       - name: Extract tag data
         run: |
           export CRATE_NAME=$(echo $GITHUB_REF_NAME | sed 's/-v.*//')
           echo "CRATE_NAME=$CRATE_NAME" >> $GITHUB_ENV
           export CRATE_VERSION=$(echo $GITHUB_REF_NAME | sed 's/.*-v/v/')
           echo "CRATE_VERSION=$CRATE_VERSION" >> $GITHUB_ENV
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ env.CRATE_NAME }}
       - name: Build binary
         run: |
           cargo build --release --bin ${{ env.CRATE_NAME }}
@@ -39,6 +43,7 @@ jobs:
           images: ghcr.io/syfaro/fuzzysearch-next/${{ env.CRATE_NAME }}
           tags: |
             type=raw,value=${{ env.CRATE_VERSION }}
+            type=raw,value=latest
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
