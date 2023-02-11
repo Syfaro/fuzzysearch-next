@@ -155,7 +155,7 @@ impl Component for FileUploader {
         let styles = self
             .preview_url
             .as_deref()
-            .map(|url| format!("background-image: url({})", url));
+            .map(|url| format!("background-image: url({url})"));
 
         html! {
             <form class="image-uploader">

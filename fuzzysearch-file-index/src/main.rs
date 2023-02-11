@@ -489,6 +489,7 @@ async fn process_files(
 
             // Somehow, duplicate values can make it through. Collect to a
             // HashMap and then back to a Vec to ensure uniqueness.
+            #[allow(clippy::iter_kv_map)]
             let values = files
                 .into_iter()
                 .map(|file| {

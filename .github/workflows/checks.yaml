@@ -13,6 +13,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - run: sudo apt-get install protobuf-compiler
+      - uses: Swatinem/rust-cache@v2
       - name: Lint
         run: |
           cargo fmt -- --check
