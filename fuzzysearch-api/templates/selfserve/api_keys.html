@@ -1,0 +1,57 @@
+<div class="container mt-2">
+    {% match alert %}
+    {% when Some with (alert) %}
+    {{ alert|safe }}
+    {% else %}
+    {% endmatch %}
+
+    <div class="col">
+        <div class="row">
+            <h2>API Keys</h2>
+
+            <form hx-post="/selfserve/key/delete" hx-target="#content"
+                hx-confirm="Are you sure you wish to delete this API key?">
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th scope="col">Name</th>
+                                <th scope="col">Key</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {% for key in api_keys %}
+                            <tr>
+                                <th scope="row">
+                                    {% match key.name %}
+                                    {% when Some with (name) %}
+                                    {{ name }}
+                                    {% else %}
+                                    <span class="text-muted">Unnamed</span>
+                                    {% endmatch %}
+                                </th>
+                                <td><code>{{ key.key }}</code></td>
+                                <td class="text-end">
+                                    <button type="submit" class="btn btn-danger btn-sm" name="key_id"
+                                        value="{{ key.id }}">
+                                        Delete
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </form>
+
+            <form hx-post="/selfserve/key/create" hx-target="#content"
+                hx-prompt="Enter a name for this key">
+                <button type="submit" class="btn btn-primary" {% if !can_create_key %} disabled {% endif %}>
+                    Create API Key
+                </button>
+            </form>
+        </div>
+    </div>
+</div>

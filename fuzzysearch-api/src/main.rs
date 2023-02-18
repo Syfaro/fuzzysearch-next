@@ -16,6 +16,7 @@ use sqlx::PgPool;
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
+    services::ServeDir,
     trace::TraceLayer,
 };
 use utoipa::OpenApi;
@@ -23,6 +24,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 mod api;
 mod db;
+mod selfserve;
 
 lazy_static! {
     static ref IMAGE_LOAD: Histogram = register_histogram!(
@@ -45,6 +47,13 @@ struct Config {
     database_url: String,
 
     #[clap(long, env)]
+    auth_secret: String,
+    #[clap(long, env)]
+    passwordless_secret: String,
+    #[clap(long, env)]
+    passwordless_public: String,
+
+    #[clap(long, env)]
     metrics_host: SocketAddr,
     #[clap(long, env)]
     json_logs: bool,
@@ -63,6 +72,11 @@ async fn main() -> eyre::Result<()> {
         otlp: config.json_logs,
     });
 
+    let auth_secret = hex::decode(&config.auth_secret).expect("auth secret was not hex");
+    if auth_secret.len() != 32 {
+        panic!("wrong auth secret length");
+    }
+
     foxlib::MetricsServer::serve(config.metrics_host, true).await;
 
     let bkapi = BKApiClient::new(config.bkapi_endpoint);
@@ -77,10 +91,7 @@ async fn main() -> eyre::Result<()> {
         .allow_origin(Any)
         .allow_headers([HeaderName::from_static("x-api-key")]);
 
-    let api_layer = ServiceBuilder::new()
-        .layer(cors)
-        .layer(Extension(bkapi))
-        .layer(Extension(client));
+    let api_layer = ServiceBuilder::new().layer(cors).layer(Extension(bkapi));
 
     let authenticated_api = Router::new()
         .route("/hashes", routing::get(api::search_image_by_hashes))
@@ -100,7 +111,15 @@ async fn main() -> eyre::Result<()> {
 
     let app_layer = ServiceBuilder::new()
         .layer(Extension(pool))
+        .layer(Extension(client))
         .layer(TraceLayer::new_for_http());
+
+    let selfserve_config = selfserve::Config {
+        secret: auth_secret,
+
+        passwordless_public: config.passwordless_public,
+        passwordless_secret: config.passwordless_secret,
+    };
 
     let app = Router::new()
         .route("/", routing::get(|| async { Redirect::to("/swagger-ui") }))
@@ -109,6 +128,16 @@ async fn main() -> eyre::Result<()> {
                 .url("/api-doc/openapi.json", api::FuzzySearchApi::openapi()),
         )
         .merge(api)
+        .nest(
+            "/selfserve",
+            selfserve::router().layer(Extension(selfserve_config)),
+        )
+        .nest_service(
+            "/assets",
+            routing::get_service(ServeDir::new("./assets")).handle_error(
+                |err: std::io::Error| async move { (StatusCode::NOT_FOUND, err.to_string()) },
+            ),
+        )
         .layer(app_layer)
         .layer(opentelemetry_tracing_layer());
 

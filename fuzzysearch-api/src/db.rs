@@ -59,12 +59,13 @@ lazy_static! {
 
 #[derive(Clone)]
 pub struct UserApiKey {
-    id: i32,
-    user_id: i32,
-    name: Option<String>,
-    name_limit: i16,
-    image_limit: i16,
-    hash_limit: i16,
+    pub id: i32,
+    pub user_id: i32,
+    pub key: String,
+    pub name: Option<String>,
+    pub name_limit: i16,
+    pub image_limit: i16,
+    pub hash_limit: i16,
 }
 
 pub async fn extract_api_key<B>(

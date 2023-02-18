@@ -1,5 +1,17 @@
 {
   "db": "PostgreSQL",
+  "16ba3e4085c86140ea4710ddf23b80e3667bffa8dd146fa71a95d36174d41c83": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      }
+    },
+    "query": "UPDATE account SET added_webauthn = true WHERE id = $1;\n"
+  },
   "1f8ab11713fafb376d51e8077e3f626347c54723aef7e0d022549fec1c2e9bad": {
     "describe": {
       "columns": [
@@ -17,6 +29,198 @@
       }
     },
     "query": "SELECT\n    url\nFROM\n    dump\nORDER BY\n    created_at DESC\nLIMIT\n    1;\n"
+  },
+  "3ab4bacdd37007a6a1235274fa7bb2429a0962e8d1f6c63b71e9ee7e913b93a8": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int4"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "SELECT id FROM account WHERE lower(email) = lower($1);\n"
+  },
+  "4304477b70f990b38b27f84b0dba580d5b0714e7c4d51749b7f8fa9988af2929": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int4"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    account (email, password)\nVALUES\n    ($1, 0) RETURNING id;\n"
+  },
+  "4824e358f86fbcfbef054b91e1e1f4a9b7cf10c8e1a994e8ba639e4a12fa4539": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int4"
+        },
+        {
+          "name": "user_id",
+          "ordinal": 1,
+          "type_info": "Int4"
+        },
+        {
+          "name": "key",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "name",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "name_limit",
+          "ordinal": 4,
+          "type_info": "Int2"
+        },
+        {
+          "name": "image_limit",
+          "ordinal": 5,
+          "type_info": "Int2"
+        },
+        {
+          "name": "hash_limit",
+          "ordinal": 6,
+          "type_info": "Int2"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "SELECT id, user_id, key, name, name_limit, image_limit, hash_limit FROM api_key WHERE key = $1;\n"
+  },
+  "522f7fd069affa5a5cec5590b386649fdaaacb29a2302a5b44fa6a2e15fcf49d": {
+    "describe": {
+      "columns": [
+        {
+          "name": "count",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      }
+    },
+    "query": "SELECT count(*) FROM api_key WHERE user_id = $1 AND deleted = false;\n"
+  },
+  "5a06f36e43d33e8e70c3f55921c9b12ec0d53c36320ff0cd9f6b5c4bf63cde4f": {
+    "describe": {
+      "columns": [
+        {
+          "name": "name",
+          "ordinal": 0,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        true
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      }
+    },
+    "query": "UPDATE\n    api_key\nSET\n    deleted = true\nWHERE\n    id = $1 RETURNING name;\n"
+  },
+  "635cf287915ab63b4135298958bcae3d452f1947d7ae9b593283d2f29cd58251": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Int4"
+        },
+        {
+          "name": "user_id",
+          "ordinal": 1,
+          "type_info": "Int4"
+        },
+        {
+          "name": "key",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "name",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "name_limit",
+          "ordinal": 4,
+          "type_info": "Int2"
+        },
+        {
+          "name": "image_limit",
+          "ordinal": 5,
+          "type_info": "Int2"
+        },
+        {
+          "name": "hash_limit",
+          "ordinal": 6,
+          "type_info": "Int2"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int4"
+        ]
+      }
+    },
+    "query": "SELECT\n    id, user_id, key, name, name_limit, image_limit, hash_limit\nFROM\n    api_key\nWHERE\n    user_id = $1\n    AND deleted = false\nORDER BY\n    id ASC;\n"
   },
   "6f7e2f045cad26b8312cb23c562c421ef7e642d998c24ab7304d3f0c6dec84d7": {
     "describe": {
@@ -342,54 +546,18 @@
     },
     "query": "WITH requested_bucket AS (\n\tSELECT * FROM json_to_recordset($3::json)\n\t\tAS requested_bucket (bucket text, count integer)\n)\nINSERT INTO rate_limit (api_key_id, time_window, group_name, count)\n\tSELECT $1, $2, requested_bucket.bucket, requested_bucket.count FROM requested_bucket\n\tON CONFLICT ON CONSTRAINT unique_window DO UPDATE SET count = rate_limit.count + EXCLUDED.count\n\tRETURNING rate_limit.group_name, rate_limit.count;\n"
   },
-  "eafcce2044e11749f09a0bb3460f627e31c3363c9d492b40d9b0c2a7a3a9bb33": {
+  "fa58291bfd6f7a4d82f5fe02f265ab0b59b31cd71c3ac466d43618f3dd34dfc2": {
     "describe": {
-      "columns": [
-        {
-          "name": "id",
-          "ordinal": 0,
-          "type_info": "Int4"
-        },
-        {
-          "name": "user_id",
-          "ordinal": 1,
-          "type_info": "Int4"
-        },
-        {
-          "name": "name",
-          "ordinal": 2,
-          "type_info": "Text"
-        },
-        {
-          "name": "name_limit",
-          "ordinal": 3,
-          "type_info": "Int2"
-        },
-        {
-          "name": "image_limit",
-          "ordinal": 4,
-          "type_info": "Int2"
-        },
-        {
-          "name": "hash_limit",
-          "ordinal": 5,
-          "type_info": "Int2"
-        }
-      ],
-      "nullable": [
-        false,
-        false,
-        true,
-        false,
-        false,
-        false
-      ],
+      "columns": [],
+      "nullable": [],
       "parameters": {
         "Left": [
+          "Int4",
+          "Text",
           "Text"
         ]
       }
     },
-    "query": "SELECT id, user_id, name, name_limit, image_limit, hash_limit FROM api_key WHERE key = $1;\n"
+    "query": "INSERT INTO\n    api_key (\n        user_id,\n        name,\n        key,\n        name_limit,\n        image_limit,\n        hash_limit\n    )\nVALUES\n    ($1, $2, $3, 120, 5, 15);\n"
   }
 }
