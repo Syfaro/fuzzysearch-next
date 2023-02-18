@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "esbuild": "^0.17.8"
+  },
+  "dependencies": {
+    "@passwordlessdev/passwordless-client": "^0.4.0",
+    "htmx.org": "^1.8.5"
+  },
+  "scripts": {
+    "build": "node ./esbuild.mjs"
+  }
+}

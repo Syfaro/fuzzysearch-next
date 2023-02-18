@@ -4,3 +4,4 @@
 /**/*.gz
 /**/*.log
 /**/dist
+node_modules/

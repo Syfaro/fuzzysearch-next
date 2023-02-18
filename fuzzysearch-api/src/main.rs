@@ -134,7 +134,7 @@ async fn main() -> eyre::Result<()> {
         )
         .nest_service(
             "/assets",
-            routing::get_service(ServeDir::new("./assets")).handle_error(
+            routing::get_service(ServeDir::new("./dist")).handle_error(
                 |err: std::io::Error| async move { (StatusCode::NOT_FOUND, err.to_string()) },
             ),
         )
