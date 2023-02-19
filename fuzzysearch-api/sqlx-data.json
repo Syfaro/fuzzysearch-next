@@ -114,6 +114,32 @@
     },
     "query": "SELECT\n    api_key.id,\n    user_id,\n    key,\n    name,\n    name_limit,\n    image_limit,\n    hash_limit\nFROM\n    api_key\n    JOIN account ON account.id = api_key.user_id\nWHERE\n    account.uuid = $1\n    AND deleted = false\nORDER BY\n    api_key.id ASC;\n"
   },
+  "2e23660532d6e970c9f0aac740a7d1ba6effcd0f77367a1caf9cc41b44da0d61": {
+    "describe": {
+      "columns": [
+        {
+          "name": "uuid",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        },
+        {
+          "name": "registered_at",
+          "ordinal": 1,
+          "type_info": "Timestamptz"
+        }
+      ],
+      "nullable": [
+        false,
+        true
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "SELECT uuid, registered_at FROM account WHERE lower(email) = lower($1);\n"
+  },
   "368f171580317f4eef8fcabd7e291ba23993e91adbf566e4d996b145274956f2": {
     "describe": {
       "columns": [
@@ -133,26 +159,6 @@
       }
     },
     "query": "SELECT\n    data\nFROM\n    session\nWHERE\n    id = $1\n    AND (\n        expires_at IS NULL\n        OR expires_at > current_timestamp\n    );\n"
-  },
-  "3ab4bacdd37007a6a1235274fa7bb2429a0962e8d1f6c63b71e9ee7e913b93a8": {
-    "describe": {
-      "columns": [
-        {
-          "name": "id",
-          "ordinal": 0,
-          "type_info": "Int4"
-        }
-      ],
-      "nullable": [
-        false
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      }
-    },
-    "query": "SELECT id FROM account WHERE lower(email) = lower($1);\n"
   },
   "4824e358f86fbcfbef054b91e1e1f4a9b7cf10c8e1a994e8ba639e4a12fa4539": {
     "describe": {

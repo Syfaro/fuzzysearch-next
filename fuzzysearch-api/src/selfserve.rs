@@ -173,7 +173,67 @@ async fn credentials_for_user(pool: &PgPool, username: &str) -> Result<Vec<Passk
 }
 
 fn filter_name_to_len(s: &str, n: usize) -> String {
-    s.chars().filter(char::is_ascii).take(n).collect::<String>()
+    s.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(n)
+        .collect::<String>()
+}
+
+#[tracing::instrument(skip(webauthn, resp, session))]
+fn prepare_registration(
+    webauthn: &Webauthn,
+    resp: &mut Response,
+    session: &mut WritableSession,
+    user_id: Uuid,
+    username: &str,
+) -> Result<(), HxError> {
+    let (mut ccr, reg_state) =
+        webauthn.start_passkey_registration(user_id, username, username, None)?;
+    ccr.public_key.authenticator_selection = Some(AuthenticatorSelectionCriteria {
+        authenticator_attachment: None,
+        require_resident_key: false,
+        user_verification: UserVerificationPolicy::Required,
+    });
+
+    session.insert("user_id", user_id)?;
+    session.insert("reg_state", reg_state)?;
+
+    let event = serde_json::json!({
+        "performRegistration": {
+            "ccr": ccr,
+        },
+    })
+    .to_string();
+
+    resp.headers_mut()
+        .insert("hx-trigger", HeaderValue::try_from(event)?);
+
+    Ok(())
+}
+
+#[tracing::instrument(skip_all)]
+fn prepare_login(
+    webauthn: &Webauthn,
+    resp: &mut Response,
+    session: &mut WritableSession,
+    creds: &[Passkey],
+) -> Result<(), HxError> {
+    let (mut rcr, passkey_auth) = webauthn.start_passkey_authentication(creds)?;
+    rcr.public_key.user_verification = UserVerificationPolicy::Required;
+
+    session.insert("auth_state", passkey_auth)?;
+
+    let event = serde_json::json!({
+        "performLogin": {
+            "rcr": rcr,
+        },
+    })
+    .to_string();
+
+    resp.headers_mut()
+        .insert("hx-trigger", HeaderValue::try_from(event)?);
+
+    Ok(())
 }
 
 #[derive(Template)]
@@ -243,16 +303,22 @@ async fn auth_form(
     Form(form): Form<AuthForm>,
 ) -> Result<Response, HxError> {
     let username = filter_name_to_len(&form.username.unwrap_or_default(), USERNAME_MAX_LENGTH);
-    let state = if username.len() < USERNAME_MIN_LENGTH {
-        AuthFormState::Error("Username must be greater than 5 characters.".into())
+    let (state, created_at) = if username.len() < USERNAME_MIN_LENGTH {
+        let state = AuthFormState::Error("Username must be greater than 5 characters.".into());
+
+        (state, None)
     } else {
-        let user_id = sqlx::query_file_scalar!("queries/selfserve/lookup_username.sql", username)
+        let user = sqlx::query_file!("queries/selfserve/lookup_username.sql", username)
             .fetch_optional(&pool)
             .await?;
 
-        user_id
+        let state = user
+            .as_ref()
             .map(|_id| AuthFormState::KnownUsername)
-            .unwrap_or(AuthFormState::UnknownUsername)
+            .unwrap_or(AuthFormState::UnknownUsername);
+        let created_at = user.and_then(|user| user.registered_at.map(|reg_at| (user.uuid, reg_at)));
+
+        (state, created_at)
     };
 
     let should_perform_login = matches!(state, AuthFormState::KnownUsername);
@@ -267,20 +333,40 @@ async fn auth_form(
         tracing::info!("user should perform login");
 
         let creds = credentials_for_user(&pool, &username).await?;
-        let (mut rcr, passkey_auth) = webauthn.start_passkey_authentication(&creds)?;
-        rcr.public_key.user_verification = UserVerificationPolicy::Required;
 
-        session.insert("auth_state", passkey_auth)?;
+        if creds.is_empty() {
+            tracing::warn!("user has no credentials");
 
-        let event = serde_json::json!({
-            "performLogin": {
-                "rcr": rcr,
-            },
-        })
-        .to_string();
+            if let Some((user_id, reg_at)) = created_at {
+                tracing::debug!(%reg_at, "found user created at");
 
-        resp.headers_mut()
-            .insert("hx-trigger", HeaderValue::try_from(event)?);
+                if reg_at + chrono::Duration::minutes(5) < chrono::Utc::now() {
+                    tracing::info!("created at older than 5 minutes, allowing registration");
+
+                    let mut resp = AlertTemplate::new(
+                        "Account already exists, allowing new credential registration because none existed.",
+                        "alert alert-warning",
+                    )
+                    .into_response();
+
+                    prepare_registration(&webauthn, &mut resp, &mut session, user_id, &username)?;
+
+                    return Ok(resp);
+                } else {
+                    tracing::info!("created at too recent, warning user");
+
+                    let resp = AlertTemplate::new(
+                        "Account already exists, try again later if no credentials are added.",
+                        "alert alert-danger",
+                    )
+                    .into_response();
+
+                    return Ok(resp);
+                }
+            }
+        } else {
+            prepare_login(&webauthn, &mut resp, &mut session, &creds)?;
+        }
     }
 
     Ok(resp)
@@ -308,36 +394,17 @@ async fn register_start(
         .fetch_one(&mut tx)
         .await?;
 
-    let (mut ccr, reg_state) =
-        webauthn.start_passkey_registration(user_id, &username, &username, None)?;
-    ccr.public_key.authenticator_selection = Some(AuthenticatorSelectionCriteria {
-        authenticator_attachment: None,
-        require_resident_key: false,
-        user_verification: UserVerificationPolicy::Required,
-    });
-
-    session.insert("user_id", user_id)?;
-    session.insert("reg_state", reg_state)?;
-
-    tx.commit().await?;
-
-    tracing::info!(%user_id, "created new account");
-
-    let event = serde_json::json!({
-        "performRegistration": {
-            "ccr": ccr,
-        },
-    })
-    .to_string();
-
     let mut resp = AlertTemplate::new(
         "Account created, please perform WebAuthn registration.",
         "alert alert-success",
     )
     .into_response();
 
-    resp.headers_mut()
-        .insert("hx-trigger", HeaderValue::try_from(event)?);
+    prepare_registration(&webauthn, &mut resp, &mut session, user_id, &username)?;
+
+    tx.commit().await?;
+
+    tracing::info!(%user_id, "created new account");
 
     Ok(resp)
 }
