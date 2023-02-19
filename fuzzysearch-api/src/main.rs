@@ -1,4 +1,4 @@
-use std::{fmt::Display, net::SocketAddr, time::Duration, sync::Arc};
+use std::{fmt::Display, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
     async_trait,
