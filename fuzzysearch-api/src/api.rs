@@ -413,6 +413,7 @@ pub async fn lookup_furaffinity_file(
     Ok((StatusCode::OK, headers, Json(results)).into_response())
 }
 
+/// Get the URL of the latest FuzzySearch database dump.
 #[utoipa::path(
     get,
     path = "/v1/dump/latest",
