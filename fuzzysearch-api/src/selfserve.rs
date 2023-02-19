@@ -6,6 +6,7 @@ use axum::{
     async_trait,
     extract::FromRequestParts,
     http::{request::Parts, HeaderValue, StatusCode},
+    response::Response,
     routing, Extension, Form, Router,
 };
 use axum_sessions::extractors::{ReadableSession, WritableSession};
@@ -15,8 +16,6 @@ use serde::Deserialize;
 use sqlx::{types::Uuid, PgPool};
 use webauthn_rs::{prelude::Passkey, Webauthn};
 use webauthn_rs_proto::{AuthenticatorSelectionCriteria, UserVerificationPolicy};
-
-type Response = axum::response::Response;
 
 pub fn router() -> Router {
     Router::new()
@@ -36,6 +35,13 @@ pub fn router() -> Router {
                 .route("/delete", routing::post(key_delete)),
         )
 }
+
+const USERNAME_MIN_LENGTH: usize = 5;
+const USERNAME_MAX_LENGTH: usize = 24;
+
+const KEY_COUNT_MAXIMUM: usize = 3;
+const KEY_NAME_MAX_LENGTH: usize = 24;
+const KEY_LENGTH: usize = 48;
 
 struct HxError(eyre::Report);
 
@@ -138,7 +144,7 @@ async fn api_keys_resp<'a>(
     .fetch_all(pool)
     .await?;
 
-    let can_create_key = api_keys.len() < 3;
+    let can_create_key = api_keys.len() < KEY_COUNT_MAXIMUM;
 
     tracing::debug!(keys = api_keys.len(), can_create_key, "found user api keys");
 
@@ -236,9 +242,9 @@ async fn auth_form(
     mut session: WritableSession,
     Form(form): Form<AuthForm>,
 ) -> Result<Response, HxError> {
-    let username = filter_name_to_len(&form.username.unwrap_or_default(), 24);
-    let state = if username.len() < 5 || username.len() > 24 {
-        AuthFormState::Error("Invalid username length.".into())
+    let username = filter_name_to_len(&form.username.unwrap_or_default(), USERNAME_MAX_LENGTH);
+    let state = if username.len() < USERNAME_MIN_LENGTH {
+        AuthFormState::Error("Username must be greater than 5 characters.".into())
     } else {
         let user_id = sqlx::query_file_scalar!("queries/selfserve/lookup_username.sql", username)
             .fetch_optional(&pool)
@@ -287,8 +293,8 @@ async fn register_start(
     mut session: WritableSession,
     Form(form): Form<AuthForm>,
 ) -> Result<Response, HxError> {
-    let username = filter_name_to_len(&form.username.unwrap_or_default(), 24);
-    if username.len() < 5 {
+    let username = filter_name_to_len(&form.username.unwrap_or_default(), USERNAME_MAX_LENGTH);
+    if username.len() < USERNAME_MIN_LENGTH {
         return Ok(AuthFormTemplate {
             state: AuthFormState::Error("Username must be greater than 5 characters.".into()),
             username: &username,
@@ -455,7 +461,7 @@ async fn key_create(
         .unwrap_or_default()
         .unwrap_or_default();
 
-    if count >= 3 {
+    if count >= KEY_COUNT_MAXIMUM as i64 {
         return Ok(api_keys_resp(
             &pool,
             user_id,
@@ -473,12 +479,12 @@ async fn key_create(
         .map(|name| {
             name.chars()
                 .filter(char::is_ascii)
-                .take(50)
+                .take(KEY_NAME_MAX_LENGTH)
                 .collect::<String>()
         })
         .filter(|s| !s.is_empty());
 
-    let key = rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), 48);
+    let key = rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), KEY_LENGTH);
     let key = format!("fzs1-{key}");
 
     sqlx::query_file!("queries/selfserve/insert_api_key.sql", user_id, name, key)
