@@ -1,5 +1,6 @@
 import autoprefixer from "autoprefixer";
 import * as esbuild from "esbuild";
+import { copy } from "esbuild-plugin-copy";
 import { sassPlugin } from "esbuild-sass-plugin";
 import postcss from "postcss";
 import postcssPresetEnv from "postcss-preset-env";
@@ -26,6 +27,14 @@ await esbuild.build({
         ]).process(source, { from: undefined });
         return css;
       },
+    }),
+    copy({
+      assets: [
+        {
+          from: ["assets/img/**/*"],
+          to: ["./img"],
+        },
+      ],
     }),
   ],
 });

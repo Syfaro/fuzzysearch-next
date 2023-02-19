@@ -3,6 +3,7 @@
     "@simplewebauthn/typescript-types": "^7.0.0",
     "@types/bootstrap": "^5.2.6",
     "autoprefixer": "^10.4.13",
+    "esbuild-plugin-copy": "^2.0.2",
     "esbuild-sass-plugin": "^2.5.0",
     "esbuild": "^0.17.8",
     "postcss-preset-env": "^8.0.1",
