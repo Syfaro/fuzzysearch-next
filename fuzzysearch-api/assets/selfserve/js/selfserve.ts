@@ -1,3 +1,5 @@
+import "bootstrap";
+
 import "./htmx";
 
 import manageTheme from "./theme";
