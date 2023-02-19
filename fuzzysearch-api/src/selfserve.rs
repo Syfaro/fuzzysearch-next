@@ -150,6 +150,10 @@ async fn credentials_for_user(pool: &PgPool, username: &str) -> Result<Vec<Passk
     Ok(passkeys)
 }
 
+fn filter_name_to_len(s: &str, n: usize) -> String {
+    s.chars().filter(char::is_ascii).take(n).collect::<String>()
+}
+
 #[derive(Template)]
 #[template(path = "selfserve/index.html")]
 struct IndexTemplate<'a> {
@@ -203,7 +207,7 @@ impl AuthFormTemplate<'_> {
 
     fn message_attrs(&self) -> &'static str {
         match self.state {
-            AuthFormState::Empty | AuthFormState::UnknownUsername => "",
+            AuthFormState::Empty | AuthFormState::Error(_) | AuthFormState::UnknownUsername => "",
             _ => "hidden",
         }
     }
@@ -216,8 +220,8 @@ async fn auth_form(
     mut session: WritableSession,
     Form(form): Form<AuthForm>,
 ) -> Result<Response, HxError> {
-    let username = form.username.unwrap_or_default();
-    let state = if username.len() < 5 || username.len() > 250 {
+    let username = filter_name_to_len(&form.username.unwrap_or_default(), 24);
+    let state = if username.len() < 5 || username.len() > 24 {
         AuthFormState::Error("Invalid username length.".into())
     } else {
         let user_id = sqlx::query_file_scalar!("queries/selfserve/lookup_username.sql", username)
@@ -296,12 +300,27 @@ where
     type Rejection = (StatusCode, &'static str);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let was_encoded = parts.headers.contains_key("hx-prompt-uri-autoencoded");
+
         if let Some(hx_prompt) = parts
             .headers
             .get("hx-prompt")
             .and_then(|val| val.to_str().ok())
         {
-            Ok(Self(hx_prompt.to_owned()))
+            let prompt = if was_encoded {
+                tracing::debug!("prompt was encoded, attempting decode");
+                match urlencoding::decode(hx_prompt) {
+                    Ok(prompt) => prompt,
+                    Err(err) => {
+                        tracing::warn!("could not decode prompt: {err}");
+                        hx_prompt.into()
+                    }
+                }
+            } else {
+                hx_prompt.into()
+            };
+
+            Ok(Self(prompt.to_string()))
         } else {
             Err((
                 StatusCode::BAD_REQUEST,
@@ -400,10 +419,6 @@ async fn key_delete(
     .await?
     .into_response();
     Ok(resp)
-}
-
-fn filter_name_to_len(s: &str, n: usize) -> String {
-    s.chars().filter(char::is_ascii).take(n).collect::<String>()
 }
 
 #[tracing::instrument(err, skip_all)]

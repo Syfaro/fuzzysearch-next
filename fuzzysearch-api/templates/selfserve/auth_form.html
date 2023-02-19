@@ -11,7 +11,7 @@
 
     <div class="form-floating mb-3">
         <input type="text" {{ self.username_attrs() }} id="username" name="username" placeholder="Username"
-            value="{{ username }}" minlength="5" maxlength="250" autocomplete="username webauthn">
+            value="{{ username }}" minlength="5" maxlength="24" autocomplete="username webauthn">
         <label for="username">Username</label>
     </div>
 
@@ -30,6 +30,6 @@
 
     <p class="form-text" {{ self.message_attrs() }}>
         This site uses Passkeys for authentication and does not support passwords.
-        Your browser may autofill saved usernames, otherwise enter any username you wish to use.
+        Enter a new or existing username and follow the prompts.
     </p>
 </form>
