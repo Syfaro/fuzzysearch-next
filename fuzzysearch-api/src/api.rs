@@ -78,7 +78,7 @@ pub struct HandleQuery {
 /// Check if a handle is being indexed for a given service.
 #[utoipa::path(
     get,
-    path = "/handle/{service}",
+    path = "/v1/handle/{service}",
     responses(
         (status = 200, description = "Handle looked up successfully", body = bool),
     ),
@@ -118,7 +118,7 @@ pub struct HashesQuery {
 /// Search for images by hashes.
 #[utoipa::path(
     get,
-    path = "/hashes",
+    path = "/v1/hashes",
     responses(
         (status = 200, description = "Image lookup completed successfully", body = [SearchResult]),
         (status = 429, description = "Rate limit exhausted"),
@@ -163,7 +163,7 @@ enum ImageError {
 /// Search for images by image upload.
 #[utoipa::path(
     post,
-    path = "/image",
+    path = "/v1/image",
     request_body(content = Image, content_type = "multipart/form-data"),
     responses(
         (status = 200, description = "Image lookup completed successfully", body = [SearchResult]),
@@ -256,7 +256,7 @@ enum UrlError {
 /// Search for images by image available at URL.
 #[utoipa::path(
     get,
-    path = "/url",
+    path = "/v1/url",
     responses(
         (status = 200, description = "Image lookup completed successfully", body = [SearchResult]),
         (status = 429, description = "Rate limit exhausted"),
@@ -352,7 +352,7 @@ pub struct FurAffinityFileQuery {
 /// Get information about a file on FurAffinity.
 #[utoipa::path(
     get,
-    path = "/file/furaffinity",
+    path = "/v1/file/furaffinity",
     responses(
         (status = 200, description = "File lookup completed successfully", body = [FurAffinityFile]),
         (status = 400, description = "Unknown search input"),
@@ -415,7 +415,7 @@ pub async fn lookup_furaffinity_file(
 
 #[utoipa::path(
     get,
-    path = "/dump/latest",
+    path = "/v1/dump/latest",
     responses(
         (status = 200, description = "File lookup completed successfully", body = String),
     ),

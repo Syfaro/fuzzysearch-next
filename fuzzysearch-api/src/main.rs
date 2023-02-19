@@ -144,6 +144,7 @@ async fn main() -> eyre::Result<()> {
             SwaggerUi::new("/swagger-ui")
                 .url("/api-doc/openapi.json", api::FuzzySearchApi::openapi()),
         )
+        .nest("/v1", api.clone())
         .merge(api)
         .nest(
             "/selfserve",
