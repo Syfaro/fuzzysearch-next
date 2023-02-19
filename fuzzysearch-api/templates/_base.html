@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width">
+
+    <title>FuzzySearch Self Serve</title>
+
+    <link href="/assets/selfserve/css/selfserve.css?{{ env!("CARGO_PKG_VERSION") }}" rel="stylesheet">
+</head>
+
+<body class="d-flex flex-column min-vh-100">
+    {% include "_navbar.html" %}
+
+    <main class="flex-grow-1">
+        <div id="content">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+
+    {% include "_footer.html" %}
+
+    <script src="/assets/selfserve/js/selfserve.js?{{ env!("CARGO_PKG_VERSION") }}"></script>
+</body>
+
+</html>

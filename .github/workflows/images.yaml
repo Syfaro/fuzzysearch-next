@@ -26,6 +26,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ env.CRATE_NAME }}
+      - name: Build JavaScript for API
+        if: env.CRATE_NAME == "fuzzysearch-api"
+        run: |
+          cd fuzzysearch-api
+          yarn install --check-files
+          NODE_ENV=production yarn run build
       - name: Build binary
         run: |
           cargo build --release --bin ${{ env.CRATE_NAME }}

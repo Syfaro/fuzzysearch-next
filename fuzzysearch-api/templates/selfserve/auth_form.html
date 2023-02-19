@@ -1,0 +1,35 @@
+<form class="p-4 p-md-5 border rounded-3" hx-post="{{ self.action() }}" hx-swap="outerHTML">
+    {% match state %}
+    {% when AuthFormState::Empty %}
+    {% when AuthFormState::Error with (error) %}
+    <div class="alert alert-danger" role="alert">{{ error }} </div>
+    {% when AuthFormState::KnownUsername %}
+    <div class="alert alert-success" role="alert">Hi {{ username }}! Let's get you signed in.</div>
+    {% when AuthFormState::UnknownUsername %}
+    <div class="alert alert-primary" role="alert">Welcome {{ username }}! Let's get you signed up.</div>
+    {% endmatch %}
+
+    <div class="form-floating mb-3">
+        <input type="text" {{ self.username_attrs() }} id="username" name="username" placeholder="Username"
+            value="{{ username }}" minlength="5" maxlength="24" autocomplete="username webauthn">
+        <label for="username">Username</label>
+    </div>
+
+    {% if state != AuthFormState::KnownUsername %}
+    <button class="w-100 btn btn-lg btn-primary" type="submit">
+        {% match state %}
+        {% when AuthFormState::KnownUsername %}
+        Sign in
+        {% when AuthFormState::UnknownUsername %}
+        Sign up
+        {% else %}
+        Sign in or sign up
+        {% endmatch %}
+    </button>
+    {% endif %}
+
+    <p class="form-text" {{ self.message_attrs() }}>
+        This site uses Passkeys for authentication and does not support passwords.
+        Enter a new or existing username and follow the prompts.
+    </p>
+</form>
