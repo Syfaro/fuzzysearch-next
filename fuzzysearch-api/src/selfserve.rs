@@ -5,13 +5,12 @@ use askama_axum::IntoResponse;
 use axum::{
     async_trait,
     extract::FromRequestParts,
-    http::{request::Parts, HeaderValue},
+    http::{request::Parts, HeaderValue, StatusCode},
     routing, Extension, Form, Router,
 };
 use axum_sessions::extractors::{ReadableSession, WritableSession};
 use eyre::ContextCompat;
 use rand::distributions::DistString;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use sqlx::{types::Uuid, PgPool};
 use webauthn_rs::{

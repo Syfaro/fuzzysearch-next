@@ -97,7 +97,10 @@ async fn main() -> eyre::Result<()> {
         .allow_origin(Any)
         .allow_headers([HeaderName::from_static("x-api-key")]);
 
-    let api_layer = ServiceBuilder::new().layer(cors).layer(Extension(bkapi));
+    let api_layer = ServiceBuilder::new()
+        .layer(cors)
+        .layer(Extension(bkapi))
+        .layer(Extension(client));
 
     let authenticated_api = Router::new()
         .route("/hashes", routing::get(api::search_image_by_hashes))
@@ -117,7 +120,6 @@ async fn main() -> eyre::Result<()> {
 
     let app_layer = ServiceBuilder::new()
         .layer(Extension(pool.clone()))
-        .layer(Extension(client))
         .layer(TraceLayer::new_for_http());
 
     let url = Url::parse(&format!("https://{}", config.rp_id)).unwrap();
