@@ -472,6 +472,16 @@
     },
     "query": "SELECT\n    submission.id,\n    file_id,\n    artist.name \"artist?\",\n    submission.hash_int hash,\n    submission.url,\n    submission.filename,\n    submission.rating,\n    submission.posted_at,\n    submission.file_size,\n    submission.file_sha256 \"sha256\",\n    submission.updated_at,\n    submission.deleted,\n    ARRAY(\n        SELECT\n            tag.name\n        FROM\n            tag_to_post\n            JOIN tag ON tag.id = tag_to_post.tag_id\n        WHERE\n            tag_to_post.post_id = submission.id\n    ) tags\nFROM\n    submission\n    LEFT JOIN artist ON artist.id = submission.artist_id\nWHERE\n    lower(submission.filename) = lower($1);\n"
   },
+  "9abc9bbd1016e3977abdb6c3428f3c81b6a1107318e2654ed80699e094e62d9d": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "DELETE FROM session WHERE expires_at < current_timestamp;\n"
+  },
   "a624a8647c2798c245ebd2570de36ec548014bdc2680626e0e0b34cf8a7ed351": {
     "describe": {
       "columns": [

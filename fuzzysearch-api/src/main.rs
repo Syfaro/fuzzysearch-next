@@ -132,6 +132,8 @@ async fn main() -> eyre::Result<()> {
     let webauthn = Arc::new(webauthn);
 
     let store = DbStore { pool };
+    store.cleanup_task().await;
+
     let selfserve_session =
         SessionLayer::new(store, &session_secret).with_cookie_name("fuzzysearch.selfserve");
 
@@ -195,6 +197,32 @@ impl IntoResponse for ReportError {
 #[derive(Clone, Debug)]
 struct DbStore {
     pool: PgPool,
+}
+
+impl DbStore {
+    async fn cleanup_task(&self) {
+        let store = self.clone();
+        let period = std::time::Duration::from_secs(60 * 5);
+
+        tokio::task::spawn(async move {
+            let mut interval = tokio::time::interval(period);
+
+            loop {
+                interval.tick().await;
+                tracing::debug!("running store cleanup");
+
+                match sqlx::query_file!("queries/session/cleanup_store.sql")
+                    .execute(&store.pool)
+                    .await
+                {
+                    Ok(result) => {
+                        tracing::debug!(rows_affected = result.rows_affected(), "cleaned up store")
+                    }
+                    Err(err) => tracing::error!("could not clean up session store: {err}"),
+                }
+            }
+        });
+    }
 }
 
 #[async_trait]
