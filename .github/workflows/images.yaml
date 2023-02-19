@@ -27,7 +27,7 @@ jobs:
         with:
           key: ${{ env.CRATE_NAME }}
       - name: Build JavaScript for API
-        if: env.CRATE_NAME == "fuzzysearch-api"
+        if: ${{ env.CRATE_NAME == 'fuzzysearch-api' }}
         run: |
           cd fuzzysearch-api
           yarn install --check-files
