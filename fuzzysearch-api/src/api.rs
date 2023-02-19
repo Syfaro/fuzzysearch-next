@@ -18,10 +18,7 @@ use utoipa::{
 
 use fuzzysearch_common::*;
 
-use crate::{
-    db::{self, RateLimitBucketsHeaders},
-    hash_image, ReportError,
-};
+use crate::{db, hash_image, ReportError};
 
 #[derive(OpenApi)]
 #[openapi(

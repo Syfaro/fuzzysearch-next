@@ -6,6 +6,7 @@ use axum::{
     response::Response,
 };
 use bkapi_client::BKApiClient;
+use chrono::TimeZone;
 use eyre::Context;
 use lazy_static::lazy_static;
 use prometheus::{
@@ -17,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use fuzzysearch_common::*;
+
+const RATE_LIMIT_WINDOW: i64 = 60;
 
 lazy_static! {
     static ref BKAPI_TIME: Histogram = register_histogram!(
@@ -110,31 +113,22 @@ struct BucketCount<'a> {
     count: i16,
 }
 
-pub struct RateLimitBucket {
-    pub bucket: String,
-    pub allowed: i16,
-    pub used: i16,
+pub struct RateLimitData {
+    pub buckets: Vec<RateLimitBucket>,
+    pub next_time_window: chrono::DateTime<chrono::Utc>,
 }
 
-impl RateLimitBucket {
-    fn remaining(&self) -> eyre::Result<u16> {
-        let remaining = u16::try_from(self.allowed)
-            .wrap_err("Allowed should always fit in u16")?
-            .saturating_sub(u16::try_from(self.used).wrap_err("Used should always fit in u16")?);
+impl RateLimitData {
+    pub fn headers(self) -> eyre::Result<HeaderMap> {
+        let mut headers = HeaderMap::with_capacity(1 + self.buckets.len() * 2);
 
-        Ok(remaining)
-    }
-}
+        let seconds_until_next = (self.next_time_window - chrono::Utc::now())
+            .num_seconds()
+            .clamp(1, RATE_LIMIT_WINDOW);
+        let seconds_header_value = HeaderValue::from_str(&seconds_until_next.to_string())?;
+        headers.insert("x-rate-limit-reset", seconds_header_value);
 
-pub trait RateLimitBucketsHeaders {
-    fn headers(self) -> eyre::Result<HeaderMap>;
-}
-
-impl RateLimitBucketsHeaders for Vec<RateLimitBucket> {
-    fn headers(self) -> eyre::Result<HeaderMap> {
-        let mut headers = HeaderMap::with_capacity(self.len() * 2);
-
-        for bucket in self {
+        for bucket in self.buckets {
             let name =
                 HeaderName::from_bytes(format!("x-rate-limit-total-{}", bucket.bucket).as_bytes())?;
             let value = HeaderValue::from_str(&bucket.allowed.to_string())?;
@@ -151,16 +145,32 @@ impl RateLimitBucketsHeaders for Vec<RateLimitBucket> {
     }
 }
 
+pub struct RateLimitBucket {
+    pub bucket: String,
+    pub allowed: i16,
+    pub used: i16,
+}
+
+impl RateLimitBucket {
+    fn remaining(&self) -> eyre::Result<u16> {
+        let remaining = u16::try_from(self.allowed)
+            .wrap_err("Allowed should always fit in u16")?
+            .saturating_sub(u16::try_from(self.used).wrap_err("Used should always fit in u16")?);
+
+        Ok(remaining)
+    }
+}
+
 impl UserApiKey {
     #[tracing::instrument(err, skip_all, fields(api_key_id = self.id))]
     pub async fn rate_limit(
         &self,
         pool: &PgPool,
         buckets: &[(&str, i16)],
-    ) -> eyre::Result<(bool, Vec<RateLimitBucket>)> {
+    ) -> eyre::Result<(bool, RateLimitData)> {
         let now = chrono::Utc::now();
         let timestamp = now.timestamp();
-        let time_window = timestamp - (timestamp % 60);
+        let time_window = timestamp - (timestamp % RATE_LIMIT_WINDOW);
 
         let bucket_counts: Vec<_> = buckets
             .iter()
@@ -217,7 +227,14 @@ impl UserApiKey {
             RATE_LIMITED_REQUEST_COUNT.inc();
         }
 
-        Ok((over_limit, applied_limits))
+        let rate_limit_data = RateLimitData {
+            buckets: applied_limits,
+            next_time_window: chrono::Utc
+                .timestamp_opt(time_window + RATE_LIMIT_WINDOW, 0)
+                .unwrap(),
+        };
+
+        Ok((over_limit, rate_limit_data))
     }
 
     fn buckets(&self) -> HashMap<String, i16> {
