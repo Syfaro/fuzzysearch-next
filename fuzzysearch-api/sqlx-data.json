@@ -154,20 +154,6 @@
     },
     "query": "SELECT id FROM account WHERE lower(email) = lower($1);\n"
   },
-  "438e682e7b87c99655f3f2865e3e542a5ec85269f3ae3ed14cd93ba24e720636": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Left": [
-          "Uuid",
-          "Text",
-          "Text"
-        ]
-      }
-    },
-    "query": "INSERT INTO\n    api_key (\n        user_id,\n        name,\n        key,\n        name_limit,\n        image_limit,\n        hash_limit\n    )\nVALUES\n    ((SELECT id FROM account WHERE uuid = $1), $2, $3, 120, 5, 15);\n"
-  },
   "4824e358f86fbcfbef054b91e1e1f4a9b7cf10c8e1a994e8ba639e4a12fa4539": {
     "describe": {
       "columns": [
@@ -654,6 +640,20 @@
       }
     },
     "query": "WITH requested_bucket AS (\n\tSELECT * FROM json_to_recordset($3::json)\n\t\tAS requested_bucket (bucket text, count integer)\n)\nINSERT INTO rate_limit (api_key_id, time_window, group_name, count)\n\tSELECT $1, $2, requested_bucket.bucket, requested_bucket.count FROM requested_bucket\n\tON CONFLICT ON CONSTRAINT unique_window DO UPDATE SET count = rate_limit.count + EXCLUDED.count\n\tRETURNING rate_limit.group_name, rate_limit.count;\n"
+  },
+  "f676c63132d921be85231350dd740e70f0b1b92b3fa65b590710a880997bf754": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Uuid",
+          "Text",
+          "Text"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    api_key (\n        user_id,\n        name,\n        key,\n        name_limit,\n        image_limit,\n        hash_limit\n    )\nVALUES\n    ((SELECT id FROM account WHERE uuid = $1), $2, $3, 60, 60, 30);\n"
   },
   "fb36820d5c1704ee286af85e78c6eac17297f0a9587a876c2902fd7c074a68a0": {
     "describe": {

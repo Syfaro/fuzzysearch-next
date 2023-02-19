@@ -8,4 +8,4 @@ INSERT INTO
         hash_limit
     )
 VALUES
-    ((SELECT id FROM account WHERE uuid = $1), $2, $3, 120, 5, 15);
+    ((SELECT id FROM account WHERE uuid = $1), $2, $3, 60, 60, 30);
