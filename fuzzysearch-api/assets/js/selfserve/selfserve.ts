@@ -2,13 +2,11 @@ import "./htmx";
 
 import manageTheme from "./theme";
 import handleErrors from "./errors";
-import applyToken from "./tokens";
 import handleLogin from "./login";
 
 function initialize() {
   manageTheme();
   handleErrors();
-  applyToken();
   handleLogin();
 }
 

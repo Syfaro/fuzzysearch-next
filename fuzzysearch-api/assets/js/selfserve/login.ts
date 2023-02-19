@@ -1,83 +1,117 @@
 import htmx from "./htmx";
 
 import {
-  Client,
-  isBrowserSupported,
-  isAutofillSupported,
-} from "@passwordlessdev/passwordless-client";
+  browserSupportsWebAuthn,
+  browserSupportsWebAuthnAutofill,
+  startAuthentication,
+  startRegistration,
+} from "@simplewebauthn/browser";
+import {
+  AuthenticationResponseJSON,
+  RegistrationResponseJSON,
+} from "@simplewebauthn/typescript-types";
 
-const mainTarget = "#content";
+const LOGIN_API_PREFIX = "/selfserve/auth";
+const LOGIN_TARGET = "#content";
 
-function extractApiKey(): string | null | undefined {
-  return document
-    .querySelector('meta[name="passwordless-api-key"]')
-    ?.getAttribute("content");
-}
+class LoginController {
+  constructor() {
+    document.body.addEventListener(
+      "performLogin",
+      this.performLogin.bind(this)
+    );
 
-function login(token: string) {
-  htmx.ajax("POST", "/selfserve/auth/login", {
-    target: mainTarget,
-    values: {
-      token: token,
-    },
-  });
-}
-
-export default function () {
-  if (!isBrowserSupported()) {
-    alert("Login requires WebAuthn support");
+    document.body.addEventListener(
+      "performRegistration",
+      this.performRegistration.bind(this)
+    );
   }
 
-  const p = new Client({
-    apiKey: extractApiKey()!,
-  });
-
-  document.body.addEventListener("performLogin", async (ev) => {
-    console.log("Attempting to perform login");
-
-    try {
-      const username = ev["detail"]?.["value"];
-      const token = await p.signinWithAlias(username);
-      login(token);
-    } catch (error) {
-      alert(error);
-      console.error(error);
-      window.location.reload();
+  async checkAutofill() {
+    const supportsAutofill = await browserSupportsWebAuthnAutofill();
+    if (!supportsAutofill) {
+      return;
     }
-  });
+    console.debug("Autofill supported");
 
-  document.body.addEventListener("performRegistration", async (ev) => {
-    console.log("Attempting to perform registration");
+    const resp = await fetch(`${LOGIN_API_PREFIX}/login/start`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({}),
+    });
+    const opts = await resp.json();
 
-    const token = ev["detail"]?.["value"];
-    if (!token) {
-      alert("Missing token");
+    const authResp = await startAuthentication(opts["publicKey"], true);
+
+    htmx.ajax("POST", `${LOGIN_API_PREFIX}/login/finish`, {
+      target: LOGIN_TARGET,
+      values: {
+        autofill: JSON.stringify(true),
+        pkc: JSON.stringify(authResp),
+      },
+    });
+  }
+
+  async performLogin(ev: Event) {
+    console.log("Performing login");
+    const rcr = ev["detail"]?.["rcr"];
+    if (!rcr) {
+      console.error("Login was missing rcr");
       return;
     }
 
+    let attResp: AuthenticationResponseJSON;
     try {
-      await p.register(token, "");
-
-      htmx.ajax("POST", "/selfserve/auth/register/complete", {
-        target: mainTarget,
-      });
+      attResp = await startAuthentication(rcr["publicKey"]);
     } catch (error) {
-      alert(error);
       console.error(error);
+      alert(error);
       window.location.reload();
+      return;
     }
-  });
 
-  isAutofillSupported().then((supported) => {
-    if (supported) {
-      console.debug("Autofill supported");
-      p.signinWithAutofill()
-        .then((token) => {
-          login(token);
-        })
-        .catch((error) => {
-          console.error(`Could not sign in with autofill: ${error}`);
-        });
+    htmx.ajax("POST", `${LOGIN_API_PREFIX}/login/finish`, {
+      target: LOGIN_TARGET,
+      values: {
+        pkc: JSON.stringify(attResp),
+      },
+    });
+  }
+
+  async performRegistration(ev: Event) {
+    console.log("Performing registration");
+    const ccr = ev["detail"]?.["ccr"];
+    if (!ccr) {
+      console.error("Registration was missing ccr");
+      return;
     }
-  });
+
+    let attResp: RegistrationResponseJSON;
+    try {
+      attResp = await startRegistration(ccr["publicKey"]);
+    } catch (error) {
+      console.error(error);
+      alert(error);
+      return;
+    }
+
+    htmx.ajax("POST", `${LOGIN_API_PREFIX}/register/finish`, {
+      target: LOGIN_TARGET,
+      values: {
+        att: JSON.stringify(attResp),
+      },
+    });
+  }
+}
+
+export default async function () {
+  if (!browserSupportsWebAuthn()) {
+    alert("Login requires WebAuthn support");
+    return;
+  }
+
+  let login = new LoginController();
+  // await login.checkAutofill();
 }

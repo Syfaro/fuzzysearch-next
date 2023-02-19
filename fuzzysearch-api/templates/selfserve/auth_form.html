@@ -28,7 +28,7 @@
     </button>
     {% endif %}
 
-    <p class="form-text">
+    <p class="form-text" {{ self.message_attrs() }}>
         This site uses Passkeys for authentication and does not support passwords.
         Your browser may autofill saved usernames, otherwise enter any username you wish to use.
     </p>

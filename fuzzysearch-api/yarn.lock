@@ -112,10 +112,15 @@
   resolved "https://registry.yarnpkg.com/@esbuild/win32-x64/-/win32-x64-0.17.8.tgz#200a0965cf654ac28b971358ecdca9cc5b44c335"
   integrity sha512-1iuezdyDNngPnz8rLRDO2C/ZZ/emJLb72OsZeqQ6gL6Avko/XCXZw+NuxBSNhBAP13Hie418V7VMt9et1FMvpg==
 
-"@passwordlessdev/passwordless-client@^0.4.0":
-  version "0.4.0"
-  resolved "https://registry.yarnpkg.com/@passwordlessdev/passwordless-client/-/passwordless-client-0.4.0.tgz#914c7fbfee1a3a125b4bb23065260909a18ccded"
-  integrity sha512-1/mWNt8z8bWXwJlrE8RcvPQFNxskpV3AuFEa1Xv1YDheIX3+wLgRt2rAQ+kO/NYyeey0K0MO6cR0tCeWXQ4FDA==
+"@simplewebauthn/browser@^7.1.0":
+  version "7.1.0"
+  resolved "https://registry.yarnpkg.com/@simplewebauthn/browser/-/browser-7.1.0.tgz#b67db5f3de85fb9236ef39ccbbaafdd5038a7968"
+  integrity sha512-SEwRBBpz/g3AbFvTrsoMbrn8b+HqCIiKE/0lmOywrZu/4ktfKxSDFVwG9U1QM4BdGrvm8kXPO0xv2xj/AqhsUw==
+
+"@simplewebauthn/typescript-types@^7.0.0":
+  version "7.0.0"
+  resolved "https://registry.yarnpkg.com/@simplewebauthn/typescript-types/-/typescript-types-7.0.0.tgz#887178424220524e71c10ae4548fbb353ed58ae6"
+  integrity sha512-bV+xACCFTsrLR/23ozHO06ZllHZaxC8LlI5YCo79GvU2BrN+rePDU2yXwZIYndNWcMQwRdndRdAhpafOh9AC/g==
 
 esbuild@^0.17.8:
   version "0.17.8"

@@ -1,9 +1,16 @@
 SELECT
-    id, user_id, key, name, name_limit, image_limit, hash_limit
+    api_key.id,
+    user_id,
+    key,
+    name,
+    name_limit,
+    image_limit,
+    hash_limit
 FROM
     api_key
+    JOIN account ON account.id = api_key.user_id
 WHERE
-    user_id = $1
+    account.uuid = $1
     AND deleted = false
 ORDER BY
-    id ASC;
+    api_key.id ASC;
