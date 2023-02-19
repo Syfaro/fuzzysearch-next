@@ -242,9 +242,24 @@ struct IndexTemplate<'a> {
     auth_form: AuthFormTemplate<'a>,
 }
 
-async fn index() -> Response {
+async fn find_username(pool: &PgPool, session: &ReadableSession) -> Option<String> {
+    let user_id: Uuid = session.get("user_id")?;
+
+    sqlx::query_file_scalar!("queries/selfserve/lookup_username_by_id.sql", user_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn index(Extension(pool): Extension<PgPool>, session: ReadableSession) -> Response {
+    let username = find_username(&pool, &session).await;
+
     IndexTemplate {
-        auth_form: Default::default(),
+        auth_form: AuthFormTemplate {
+            username: username.as_deref().unwrap_or_default(),
+            ..Default::default()
+        },
     }
     .into_response()
 }

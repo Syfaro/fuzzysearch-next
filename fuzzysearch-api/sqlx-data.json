@@ -454,6 +454,26 @@
     },
     "query": "DELETE FROM session WHERE expires_at < current_timestamp;\n"
   },
+  "a3718b1a1f5e714a01449957a2da0edff48915d4a01078ea619b5d4846aee8a7": {
+    "describe": {
+      "columns": [
+        {
+          "name": "email",
+          "ordinal": 0,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "SELECT email FROM account WHERE uuid = $1;\n"
+  },
   "a624a8647c2798c245ebd2570de36ec548014bdc2680626e0e0b34cf8a7ed351": {
     "describe": {
       "columns": [
