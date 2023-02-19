@@ -54,6 +54,25 @@ where
     }
 }
 
+struct HxUser(Uuid);
+
+#[async_trait]
+impl<S> FromRequestParts<S> for HxUser
+where
+    S: Send + Sync,
+{
+    type Rejection = HxError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let session = ReadableSession::from_request_parts(parts, state).await?;
+
+        let user_id = session.get("user_id").context("missing user_id")?;
+        tracing::info!(%user_id, "found user from request");
+
+        Ok(Self(user_id))
+    }
+}
+
 #[derive(Template)]
 #[template(path = "selfserve/error.html")]
 struct ErrorTemplate {
@@ -261,23 +280,127 @@ async fn auth_form(
     Ok(resp)
 }
 
-struct HxUser(Uuid);
-
-#[async_trait]
-impl<S> FromRequestParts<S> for HxUser
-where
-    S: Send + Sync,
-{
-    type Rejection = HxError;
-
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let session = ReadableSession::from_request_parts(parts, state).await?;
-
-        let user_id = session.get("user_id").context("missing user_id")?;
-        tracing::info!(%user_id, "found user from request");
-
-        Ok(Self(user_id))
+#[tracing::instrument(err, skip_all)]
+async fn register_start(
+    Extension(webauthn): Extension<Arc<Webauthn>>,
+    Extension(pool): Extension<PgPool>,
+    mut session: WritableSession,
+    Form(form): Form<AuthForm>,
+) -> Result<Response, HxError> {
+    let username = filter_name_to_len(&form.username.unwrap_or_default(), 24);
+    if username.len() < 5 {
+        return Ok(AuthFormTemplate {
+            state: AuthFormState::Error("Username must be greater than 5 characters.".into()),
+            username: &username,
+        }
+        .into_response());
     }
+
+    let mut tx = pool.begin().await?;
+
+    let user_id = sqlx::query_file_scalar!("queries/selfserve/insert_account.sql", username)
+        .fetch_one(&mut tx)
+        .await?;
+
+    let (mut ccr, reg_state) =
+        webauthn.start_passkey_registration(user_id, &username, &username, None)?;
+    ccr.public_key.authenticator_selection = Some(AuthenticatorSelectionCriteria {
+        authenticator_attachment: None,
+        require_resident_key: false,
+        user_verification: UserVerificationPolicy::Required,
+    });
+
+    session.insert("user_id", user_id)?;
+    session.insert("reg_state", reg_state)?;
+
+    tx.commit().await?;
+
+    tracing::info!(%user_id, "created new account");
+
+    let event = serde_json::json!({
+        "performRegistration": {
+            "ccr": ccr,
+        },
+    })
+    .to_string();
+
+    let mut resp = AlertTemplate::new(
+        "Account created, please perform WebAuthn registration.",
+        "alert alert-success",
+    )
+    .into_response();
+
+    resp.headers_mut()
+        .insert("hx-trigger", HeaderValue::try_from(event)?);
+
+    Ok(resp)
+}
+
+#[derive(Deserialize)]
+struct AuthRegisterFinishForm {
+    att: String,
+}
+
+#[tracing::instrument(err, skip_all)]
+async fn register_finish(
+    Extension(webauthn): Extension<Arc<Webauthn>>,
+    Extension(pool): Extension<PgPool>,
+    HxUser(user_id): HxUser,
+    mut session: WritableSession,
+    Form(reg): Form<AuthRegisterFinishForm>,
+) -> Result<Response, HxError> {
+    let auth_state = session.get("reg_state").context("missing reg_state")?;
+
+    let reg = serde_json::from_str(&reg.att)?;
+    let auth_result = webauthn.finish_passkey_registration(&reg, &auth_state)?;
+
+    let cred_id = auth_result.cred_id().0.to_owned();
+
+    sqlx::query_file!(
+        "queries/selfserve/insert_credential.sql",
+        user_id,
+        cred_id,
+        serde_json::to_value(auth_result)?
+    )
+    .execute(&pool)
+    .await?;
+
+    session.remove("reg_state");
+
+    tracing::info!("finished registering user");
+
+    Ok(api_keys_resp(&pool, user_id, None).await.into_response())
+}
+
+#[derive(Deserialize)]
+struct AuthLoginFinishForm {
+    pkc: String,
+}
+
+#[tracing::instrument(err, skip_all)]
+async fn login_finish(
+    Extension(webauthn): Extension<Arc<Webauthn>>,
+    Extension(pool): Extension<PgPool>,
+    mut session: WritableSession,
+    Form(reg): Form<AuthLoginFinishForm>,
+) -> Result<Response, HxError> {
+    let auth_state = session.get("auth_state").context("missing auth_state")?;
+    session.remove("auth_state");
+
+    let reg = serde_json::from_str(&reg.pkc)?;
+    let auth_result = webauthn.finish_passkey_authentication(&reg, &auth_state)?;
+
+    let user_id = sqlx::query_file_scalar!(
+        "queries/selfserve/lookup_user_by_credential.sql",
+        auth_result.cred_id().0
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    session.insert("user_id", user_id)?;
+    tracing::info!(%user_id, "finished signing in user");
+
+    Ok(api_keys_resp(&pool, user_id, None).await.into_response())
 }
 
 struct HxPrompt(String);
@@ -390,9 +513,10 @@ async fn key_delete(
     HxUser(user_id): HxUser,
     Form(form): Form<KeyDeleteForm>,
 ) -> Result<Response, HxError> {
-    let name = sqlx::query_file_scalar!("queries/selfserve/delete_api_key.sql", form.key_id)
-        .fetch_one(&pool)
-        .await?;
+    let name =
+        sqlx::query_file_scalar!("queries/selfserve/delete_api_key.sql", form.key_id, user_id)
+            .fetch_one(&pool)
+            .await?;
 
     let name = name.as_deref().unwrap_or("unnamed");
 
@@ -409,128 +533,4 @@ async fn key_delete(
     .await?
     .into_response();
     Ok(resp)
-}
-
-#[tracing::instrument(err, skip_all)]
-async fn register_start(
-    Extension(webauthn): Extension<Arc<Webauthn>>,
-    Extension(pool): Extension<PgPool>,
-    mut session: WritableSession,
-    Form(form): Form<AuthForm>,
-) -> Result<Response, HxError> {
-    let username = filter_name_to_len(&form.username.unwrap_or_default(), 24);
-    if username.len() < 5 {
-        return Ok(AuthFormTemplate {
-            state: AuthFormState::Error("Username must be greater than 5 characters.".into()),
-            username: &username,
-        }
-        .into_response());
-    }
-
-    let mut tx = pool.begin().await?;
-
-    let user_id = sqlx::query_file_scalar!("queries/selfserve/insert_account.sql", username)
-        .fetch_one(&mut tx)
-        .await?;
-
-    let (mut ccr, reg_state) =
-        webauthn.start_passkey_registration(user_id, &username, &username, None)?;
-    ccr.public_key.authenticator_selection = Some(AuthenticatorSelectionCriteria {
-        authenticator_attachment: None,
-        require_resident_key: false,
-        user_verification: UserVerificationPolicy::Required,
-    });
-
-    session.insert("user_id", user_id)?;
-    session.insert("reg_state", reg_state)?;
-
-    tx.commit().await?;
-
-    tracing::info!(%user_id, "created new account");
-
-    let event = serde_json::json!({
-        "performRegistration": {
-            "ccr": ccr,
-        },
-    })
-    .to_string();
-
-    let mut resp = AlertTemplate::new(
-        "Account created, please perform WebAuthn registration.",
-        "alert alert-success",
-    )
-    .into_response();
-
-    resp.headers_mut()
-        .insert("hx-trigger", HeaderValue::try_from(event)?);
-
-    Ok(resp)
-}
-
-#[derive(Deserialize)]
-struct AuthRegisterFinishForm {
-    att: String,
-}
-
-#[tracing::instrument(err, skip_all)]
-async fn register_finish(
-    Extension(webauthn): Extension<Arc<Webauthn>>,
-    Extension(pool): Extension<PgPool>,
-    HxUser(user_id): HxUser,
-    mut session: WritableSession,
-    Form(reg): Form<AuthRegisterFinishForm>,
-) -> Result<Response, HxError> {
-    let auth_state = session.get("reg_state").context("missing reg_state")?;
-
-    let reg = serde_json::from_str(&reg.att)?;
-    let auth_result = webauthn.finish_passkey_registration(&reg, &auth_state)?;
-
-    let cred_id = auth_result.cred_id().0.to_owned();
-
-    sqlx::query_file!(
-        "queries/selfserve/insert_credential.sql",
-        user_id,
-        cred_id,
-        serde_json::to_value(auth_result)?
-    )
-    .execute(&pool)
-    .await?;
-
-    session.remove("reg_state");
-
-    tracing::info!("finished registering user");
-
-    let resp = api_keys_resp(&pool, user_id, None).await.into_response();
-    Ok(resp)
-}
-
-#[derive(Deserialize)]
-struct AuthLoginFinishForm {
-    pkc: String,
-}
-
-#[tracing::instrument(err, skip_all)]
-async fn login_finish(
-    Extension(webauthn): Extension<Arc<Webauthn>>,
-    Extension(pool): Extension<PgPool>,
-    mut session: WritableSession,
-    Form(reg): Form<AuthLoginFinishForm>,
-) -> Result<Response, HxError> {
-    let auth_state = session.get("auth_state").context("missing auth_state")?;
-    session.remove("auth_state");
-
-    let reg = serde_json::from_str(&reg.pkc)?;
-    let auth_result = webauthn.finish_passkey_authentication(&reg, &auth_state)?;
-
-    let user_id = sqlx::query_file_scalar!(
-        "queries/selfserve/lookup_user_by_credential.sql",
-        auth_result.cred_id().0
-    )
-    .fetch_one(&pool)
-    .await?;
-
-    session.insert("user_id", user_id)?;
-    tracing::info!(%user_id, "finished signing in user");
-
-    Ok(api_keys_resp(&pool, user_id, None).await.into_response())
 }
