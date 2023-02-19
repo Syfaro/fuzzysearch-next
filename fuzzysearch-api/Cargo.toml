@@ -39,7 +39,7 @@ url = "2.2.2"
 urlencoding = "2.1.2"
 utoipa = { version = "3.0.2", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "3.0.1", features = ["axum"] }
-webauthn-rs = { version = "0.4.8", features = ["resident-key-support", "danger-allow-state-serialisation", "danger-credential-internals"] }
+webauthn-rs = { version = "0.4.8", features = ["danger-allow-state-serialisation"] }
 webauthn-rs-proto = "0.4.8"
 
 fuzzysearch-common = { path = "../fuzzysearch-common", features = ["api-types"] }

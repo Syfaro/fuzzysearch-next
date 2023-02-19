@@ -13,11 +13,8 @@ use eyre::ContextCompat;
 use rand::distributions::DistString;
 use serde::Deserialize;
 use sqlx::{types::Uuid, PgPool};
-use webauthn_rs::{
-    prelude::{Credential, Passkey},
-    Webauthn,
-};
-use webauthn_rs_proto::UserVerificationPolicy;
+use webauthn_rs::{prelude::Passkey, Webauthn};
+use webauthn_rs_proto::{AuthenticatorSelectionCriteria, UserVerificationPolicy};
 
 type Response = axum::response::Response;
 
@@ -246,14 +243,7 @@ async fn auth_form(
 
         let creds = credentials_for_user(&pool, &username).await?;
         let (mut rcr, passkey_auth) = webauthn.start_passkey_authentication(&creds)?;
-        if creds
-            .iter()
-            .cloned()
-            .any(|cred| Credential::from(cred).user_verified)
-        {
-            tracing::info!("passkey was created with verification, requiring");
-            rcr.public_key.user_verification = UserVerificationPolicy::Required;
-        }
+        rcr.public_key.user_verification = UserVerificationPolicy::Required;
 
         session.insert("auth_state", passkey_auth)?;
 
@@ -443,8 +433,13 @@ async fn register_start(
         .fetch_one(&mut tx)
         .await?;
 
-    let (ccr, reg_state) =
+    let (mut ccr, reg_state) =
         webauthn.start_passkey_registration(user_id, &username, &username, None)?;
+    ccr.public_key.authenticator_selection = Some(AuthenticatorSelectionCriteria {
+        authenticator_attachment: None,
+        require_resident_key: false,
+        user_verification: UserVerificationPolicy::Required,
+    });
 
     session.insert("user_id", user_id)?;
     session.insert("reg_state", reg_state)?;

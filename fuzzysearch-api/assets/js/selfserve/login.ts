@@ -65,6 +65,7 @@ class LoginController {
     let attResp: AuthenticationResponseJSON;
     try {
       attResp = await startAuthentication(rcr["publicKey"]);
+      console.debug(attResp);
     } catch (error) {
       console.error(error);
       alert(error);
@@ -91,6 +92,7 @@ class LoginController {
     let attResp: RegistrationResponseJSON;
     try {
       attResp = await startRegistration(ccr["publicKey"]);
+      console.debug(attResp);
     } catch (error) {
       console.error(error);
       alert(error);
