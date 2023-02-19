@@ -127,6 +127,7 @@ async fn main() -> eyre::Result<()> {
     let webauthn = webauthn_rs::WebauthnBuilder::new(&config.rp_id, &url)
         .unwrap()
         .rp_name(config.rp_name.as_ref().unwrap_or(&config.rp_id))
+        .allow_subdomains(true)
         .build()
         .unwrap();
     let webauthn = Arc::new(webauthn);
