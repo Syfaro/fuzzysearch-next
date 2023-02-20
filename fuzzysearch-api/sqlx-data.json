@@ -216,6 +216,32 @@
     },
     "query": "SELECT id, user_id, key, name, name_limit, image_limit, hash_limit FROM api_key WHERE key = $1;\n"
   },
+  "5520e2be5d6e33f92019b4d73b832fbd29cb371ae23a1e853f9add05935d292f": {
+    "describe": {
+      "columns": [
+        {
+          "name": "uuid",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        },
+        {
+          "name": "credential",
+          "ordinal": 1,
+          "type_info": "Jsonb"
+        }
+      ],
+      "nullable": [
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Bytea"
+        ]
+      }
+    },
+    "query": "SELECT\n    account.uuid,\n    webauthn_credential.credential\nFROM\n    webauthn_credential\n    JOIN account ON account.id = webauthn_credential.user_id\nWHERE\n    credential_id = $1;\n"
+  },
   "60d765c096b5b8d9f1e7e51dd3d04dda95814796a08832554c81332388b0ef08": {
     "describe": {
       "columns": [],
