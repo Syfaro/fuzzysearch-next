@@ -14,10 +14,12 @@ use axum_sessions::{
 use axum_tracing_opentelemetry::opentelemetry_tracing_layer;
 use bkapi_client::BKApiClient;
 use clap::Parser;
+use enum_map::Enum;
 use eyre::Report;
 use lazy_static::lazy_static;
 use prometheus::{register_histogram, Histogram};
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -63,7 +65,22 @@ struct Config {
     metrics_host: SocketAddr,
     #[clap(long, env)]
     json_logs: bool,
+
+    #[clap(long, env)]
+    unleash_api_url: String,
+    #[clap(long, env)]
+    unleash_secret: String,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, Enum)]
+enum Features {
+    #[serde(rename = "fuzzysearch_self_serve")]
+    SelfServe,
+    #[serde(rename = "fuzzysearch_discoverable_authentication")]
+    DiscoverableAuth,
+}
+
+type Unleash = foxlib::flags::Unleash<Features>;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -78,7 +95,7 @@ async fn main() -> eyre::Result<()> {
         otlp: config.json_logs,
     });
 
-    let session_secret = hex::decode(&config.session_secret).expect("auth secret was not hex");
+    let session_secret = hex::decode(&config.session_secret)?;
     if session_secret.len() != 64 {
         panic!("wrong session secret length");
     }
@@ -91,6 +108,14 @@ async fn main() -> eyre::Result<()> {
     let client = reqwest::ClientBuilder::default()
         .timeout(Duration::from_secs(10))
         .build()?;
+
+    let unleash = foxlib::flags::client::<Features>(
+        "fuzzysearch-api",
+        &config.unleash_api_url,
+        config.unleash_secret,
+    )
+    .await
+    .expect("could not create unleash client");
 
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
@@ -120,6 +145,7 @@ async fn main() -> eyre::Result<()> {
 
     let app_layer = ServiceBuilder::new()
         .layer(Extension(pool.clone()))
+        .layer(Extension(unleash))
         .layer(TraceLayer::new_for_http());
 
     let url = Url::parse(&format!("https://{}", config.rp_id)).unwrap();

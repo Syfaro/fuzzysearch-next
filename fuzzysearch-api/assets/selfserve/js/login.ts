@@ -36,20 +36,27 @@ class LoginController {
 
     const resp = await fetch(`${LOGIN_API_PREFIX}/login/start`, {
       method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({}),
     });
     const opts = await resp.json();
+    if (opts === false) {
+      console.debug("Autofill is disabled on server");
+      return;
+    }
 
-    const authResp = await startAuthentication(opts["publicKey"], true);
+    let attResp: AuthenticationResponseJSON;
+    try {
+      attResp = await startAuthentication(opts["publicKey"], true);
+      console.debug(attResp);
+    } catch (error) {
+      console.error(error);
+      return;
+    }
 
     htmx.ajax("POST", `${LOGIN_API_PREFIX}/login/finish`, {
       target: LOGIN_TARGET,
       values: {
         autofill: JSON.stringify(true),
-        pkc: JSON.stringify(authResp),
+        pkc: JSON.stringify(attResp),
       },
     });
   }
@@ -115,5 +122,5 @@ export default async function () {
   }
 
   let login = new LoginController();
-  // await login.checkAutofill();
+  await login.checkAutofill();
 }

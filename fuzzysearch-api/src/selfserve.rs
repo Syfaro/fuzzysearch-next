@@ -5,17 +5,24 @@ use askama_axum::IntoResponse;
 use axum::{
     async_trait,
     extract::FromRequestParts,
-    http::{request::Parts, HeaderValue, StatusCode},
+    http::{request::Parts, HeaderValue, Request, StatusCode},
+    middleware::{self, Next},
     response::Response,
-    routing, Extension, Form, Router,
+    routing, Extension, Form, Json, RequestPartsExt, Router,
 };
 use axum_sessions::extractors::{ReadableSession, WritableSession};
 use eyre::ContextCompat;
+use foxlib::flags::Context;
 use rand::distributions::DistString;
 use serde::Deserialize;
 use sqlx::{types::Uuid, PgPool};
+use thiserror::Error;
 use webauthn_rs::{prelude::Passkey, Webauthn};
-use webauthn_rs_proto::{AuthenticatorSelectionCriteria, UserVerificationPolicy};
+use webauthn_rs_proto::{
+    AuthenticatorAttachment, AuthenticatorSelectionCriteria, UserVerificationPolicy,
+};
+
+use crate::{Features, Unleash};
 
 pub fn router() -> Router {
     Router::new()
@@ -26,6 +33,7 @@ pub fn router() -> Router {
                 .route("/", routing::post(auth_form))
                 .route("/register/start", routing::post(register_start))
                 .route("/register/finish", routing::post(register_finish))
+                .route("/login/start", routing::post(login_start))
                 .route("/login/finish", routing::post(login_finish)),
         )
         .nest(
@@ -34,6 +42,75 @@ pub fn router() -> Router {
                 .route("/create", routing::post(key_create))
                 .route("/delete", routing::post(key_delete)),
         )
+        .route_layer(middleware::from_fn(unleash_context))
+}
+
+#[derive(Clone, Debug)]
+struct UnleashContext(Arc<Context>);
+
+impl std::ops::Deref for UnleashContext {
+    type Target = Context;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+pub async fn unleash_context<B>(req: Request<B>, next: Next<B>) -> Result<Response, HxError> {
+    let (mut parts, body) = req.into_parts();
+
+    let data = parts
+        .extract::<ReadableSession>()
+        .await
+        .ok()
+        .map(|session| {
+            (
+                session.id().to_string(),
+                session.get::<Uuid>("user_id").map(|id| id.to_string()),
+            )
+        });
+
+    let unleash = match parts.extensions.get::<Unleash>() {
+        Some(unleash) => unleash,
+        None => {
+            return Err(HxError::message(
+                "Server is misconfigured.",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ))
+        }
+    };
+
+    let (session_id, user_id) = match data {
+        Some((session_id, user_id)) => (Some(session_id), user_id),
+        None => (None, None),
+    };
+
+    let context = Context {
+        session_id,
+        user_id,
+        properties: [(
+            "appVersion".to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        )]
+        .into_iter()
+        .collect(),
+        ..Default::default()
+    };
+
+    tracing::trace!("created context for user: {context:?}");
+
+    if !unleash.is_enabled(Features::SelfServe, Some(&context), false) {
+        return Err(HxError::message(
+            "Self serve is currently disabled.",
+            StatusCode::FORBIDDEN,
+        ));
+    }
+
+    parts.extensions.insert(UnleashContext(Arc::new(context)));
+
+    let req = Request::from_parts(parts, body);
+
+    Ok(next.run(req).await)
 }
 
 const USERNAME_MIN_LENGTH: usize = 5;
@@ -43,20 +120,45 @@ const KEY_COUNT_MAXIMUM: usize = 3;
 const KEY_NAME_MAX_LENGTH: usize = 24;
 const KEY_LENGTH: usize = 48;
 
-struct HxError(eyre::Report);
-
-impl std::fmt::Display for HxError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
+#[derive(Error, Debug)]
+pub enum HxError {
+    #[error("Database Error")]
+    Database(#[from] sqlx::Error),
+    #[error("Serialization Error")]
+    Serialization(#[from] serde_json::Error),
+    #[error("WebAuthn Error: {0}")]
+    WebAuthn(#[from] webauthn_rs::prelude::WebauthnError),
+    #[error("Value Error")]
+    Value(#[from] reqwest::header::InvalidHeaderValue),
+    #[error("Unknown Error: {0}")]
+    Unknown(#[from] eyre::Report),
+    #[error("Unauthorized")]
+    Unauthorized,
+    #[error("Error Message: {text}")]
+    Message {
+        text: Cow<'static, str>,
+        status_code: StatusCode,
+    },
 }
 
-impl<R> From<R> for HxError
-where
-    R: Into<eyre::Report>,
-{
-    fn from(err: R) -> Self {
-        HxError(err.into())
+impl HxError {
+    fn message<M>(text: M, status_code: StatusCode) -> Self
+    where
+        M: Into<Cow<'static, str>>,
+    {
+        Self::Message {
+            text: text.into(),
+            status_code,
+        }
+    }
+
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::Database(_) | Self::Unknown(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Serialization(_) | Self::WebAuthn(_) | Self::Value(_) => StatusCode::BAD_REQUEST,
+            Self::Message { status_code, .. } => *status_code,
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+        }
     }
 }
 
@@ -70,9 +172,11 @@ where
     type Rejection = HxError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let session = ReadableSession::from_request_parts(parts, state).await?;
+        let session = ReadableSession::from_request_parts(parts, state)
+            .await
+            .map_err(eyre::Report::from)?;
 
-        let user_id = session.get("user_id").context("missing user_id")?;
+        let user_id = session.get("user_id").ok_or(HxError::Unauthorized)?;
         tracing::info!(%user_id, "found user from request");
 
         Ok(Self(user_id))
@@ -81,18 +185,29 @@ where
 
 #[derive(Template)]
 #[template(path = "selfserve/error.html")]
-struct ErrorTemplate {
-    message: String,
+struct ErrorTemplate<'a> {
+    message: Cow<'a, str>,
+    status_code: StatusCode,
 }
 
 impl IntoResponse for HxError {
     fn into_response(self) -> Response {
-        tracing::error!("building error for client: {}", self.0);
+        let status_code = self.status_code();
 
-        let message = self.0.to_string();
+        let message = if let Self::Message { text, .. } = self {
+            tracing::warn!("building message for client: {text}");
+            text
+        } else {
+            tracing::error!("build error for client: {:?}", self);
+            self.to_string().into()
+        };
 
-        let mut resp = ErrorTemplate { message }.into_response();
-        *resp.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+        let mut resp = ErrorTemplate {
+            message,
+            status_code,
+        }
+        .into_response();
+        *resp.status_mut() = status_code;
 
         let headers = resp.headers_mut();
         headers.insert("hx-error", HeaderValue::from_static("true"));
@@ -190,7 +305,7 @@ fn prepare_registration(
     let (mut ccr, reg_state) =
         webauthn.start_passkey_registration(user_id, username, username, None)?;
     ccr.public_key.authenticator_selection = Some(AuthenticatorSelectionCriteria {
-        authenticator_attachment: None,
+        authenticator_attachment: Some(AuthenticatorAttachment::Platform),
         require_resident_key: false,
         user_verification: UserVerificationPolicy::Required,
     });
@@ -350,39 +465,54 @@ async fn auth_form(
         let creds = credentials_for_user(&pool, &username).await?;
 
         if creds.is_empty() {
-            tracing::warn!("user has no credentials");
-
-            if let Some((user_id, reg_at)) = created_at {
-                tracing::debug!(%reg_at, "found user created at");
-
-                if reg_at + chrono::Duration::minutes(5) < chrono::Utc::now() {
-                    tracing::info!("created at older than 5 minutes, allowing registration");
-
-                    let mut resp = AlertTemplate::new(
-                        "Account already exists, allowing new credential registration because none existed.",
-                        "alert alert-warning",
-                    )
-                    .into_response();
-
-                    prepare_registration(&webauthn, &mut resp, &mut session, user_id, &username)?;
-
-                    return Ok(resp);
-                } else {
-                    tracing::info!("created at too recent, warning user");
-
-                    let resp = AlertTemplate::new(
-                        "Account already exists, try again later if no credentials are added.",
-                        "alert alert-danger",
-                    )
-                    .into_response();
-
-                    return Ok(resp);
-                }
-            }
+            return handle_no_creds(&webauthn, &mut session, &username, created_at);
         } else {
             prepare_login(&webauthn, &mut resp, &mut session, &creds)?;
         }
     }
+
+    Ok(resp)
+}
+
+fn handle_no_creds(
+    webauthn: &Webauthn,
+    session: &mut WritableSession,
+    username: &str,
+    created_at: Option<(Uuid, chrono::DateTime<chrono::Utc>)>,
+) -> Result<Response, HxError> {
+    tracing::warn!("user has no credentials");
+
+    let resp = if let Some((user_id, reg_at)) = created_at {
+        tracing::debug!(%reg_at, "found user created at");
+
+        if reg_at + chrono::Duration::minutes(5) < chrono::Utc::now() {
+            tracing::info!("created at older than 5 minutes, allowing registration");
+
+            let mut resp = AlertTemplate::new(
+                "Account already exists, allowing new credential registration because none existed.",
+                "alert alert-warning",
+            )
+            .into_response();
+
+            prepare_registration(webauthn, &mut resp, session, user_id, username)?;
+
+            resp
+        } else {
+            tracing::info!("created at too recent, warning user");
+
+            AlertTemplate::new(
+                "Account already exists, try again later if no credentials are added.",
+                "alert alert-danger",
+            )
+            .into_response()
+        }
+    } else {
+        AlertTemplate::new(
+            "Account already exists, but no credentials are registered.",
+            "alert alert-danger",
+        )
+        .into_response()
+    };
 
     Ok(resp)
 }
@@ -460,6 +590,24 @@ async fn register_finish(
     Ok(api_keys_resp(&pool, user_id, None).await.into_response())
 }
 
+async fn login_start(
+    Extension(unleash): Extension<Unleash>,
+    Extension(webauthn): Extension<Arc<Webauthn>>,
+    Extension(context): Extension<UnleashContext>,
+    mut session: WritableSession,
+) -> Result<Response, HxError> {
+    if !unleash.is_enabled(Features::DiscoverableAuth, Some(&context), false) {
+        return Ok(Json(false).into_response());
+    }
+
+    let (mut rcr, discoverable_auth) = webauthn.start_discoverable_authentication()?;
+    rcr.public_key.user_verification = UserVerificationPolicy::Required;
+
+    session.insert("discoverable_auth", discoverable_auth)?;
+
+    Ok(Json(rcr).into_response())
+}
+
 #[derive(Deserialize)]
 struct AuthLoginFinishForm {
     pkc: String,
@@ -467,16 +615,44 @@ struct AuthLoginFinishForm {
 
 #[tracing::instrument(err, skip_all)]
 async fn login_finish(
+    Extension(unleash): Extension<Unleash>,
     Extension(webauthn): Extension<Arc<Webauthn>>,
     Extension(pool): Extension<PgPool>,
+    Extension(context): Extension<UnleashContext>,
     mut session: WritableSession,
     Form(reg): Form<AuthLoginFinishForm>,
 ) -> Result<Response, HxError> {
-    let auth_state = session.get("auth_state").context("missing auth_state")?;
-    session.remove("auth_state");
-
     let reg = serde_json::from_str(&reg.pkc)?;
-    let auth_result = webauthn.finish_passkey_authentication(&reg, &auth_state)?;
+
+    let auth_result = if let Some(auth_state) = session.get("auth_state") {
+        session.remove("auth_state");
+
+        webauthn.finish_passkey_authentication(&reg, &auth_state)?
+    } else if let Some(discoverable_auth) = session.get("discoverable_auth") {
+        session.remove("discoverable_auth");
+
+        if !unleash.is_enabled(Features::DiscoverableAuth, Some(&context), false) {
+            return Err(HxError::message(
+                "Discoverable authentication is not enabled.",
+                StatusCode::FORBIDDEN,
+            ));
+        }
+
+        let credential = sqlx::query_file!(
+            "queries/selfserve/lookup_credential_by_id.sql",
+            reg.raw_id.0
+        )
+        .fetch_one(&pool)
+        .await?;
+
+        let creds = vec![serde_json::from_value(credential.credential)?];
+        webauthn.finish_discoverable_authentication(&reg, discoverable_auth, &creds)?
+    } else {
+        return Err(HxError::message(
+            "Missing authentication state, please retry.",
+            StatusCode::UNAUTHORIZED,
+        ));
+    };
 
     let user_id = sqlx::query_file_scalar!(
         "queries/selfserve/lookup_user_by_credential.sql",
