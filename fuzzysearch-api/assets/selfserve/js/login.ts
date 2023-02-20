@@ -103,6 +103,7 @@ class LoginController {
     } catch (error) {
       console.error(error);
       alert(error);
+      window.location.reload();
       return;
     }
 
