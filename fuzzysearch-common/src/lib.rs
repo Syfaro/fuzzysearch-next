@@ -93,6 +93,8 @@ pub struct SearchResult {
     pub rating: Option<Rating>,
     /// When the image was posted, if known.
     pub posted_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Any tags associated with the image.
+    pub tags: Vec<String>,
     /// A SHA256 of the contents of the image, if known.
     pub sha256: Option<String>,
 

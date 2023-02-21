@@ -13,6 +13,7 @@ SELECT
     null sources,
     submission.rating,
     submission.posted_at,
+    ARRAY(SELECT tag.name FROM tag_to_post JOIN tag ON tag.id = tag_to_post.tag_id WHERE tag_to_post.post_id = submission.id) tags,
     hashes.searched_hash "searched_hash!",
     hashes.distance "distance!",
     submission.file_sha256 sha256
@@ -32,6 +33,7 @@ SELECT
     ARRAY(SELECT jsonb_array_elements_text(e621.data->'sources')) sources,
     e621.data->>'rating' rating,
     to_timestamp(data->>'created_at', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') posted_at,
+    e621.tags,
     hashes.searched_hash,
     hashes.distance,
     e621.sha256
@@ -50,6 +52,7 @@ SELECT
     null sources,
     weasyl.data->>'rating' rating,
     to_timestamp(data->>'posted_at', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') posted_at,
+    ARRAY(select jsonb_array_elements_text(weasyl.data->'tags')) tags,
     hashes.searched_hash,
     hashes.distance,
     weasyl.sha256
@@ -71,6 +74,7 @@ SELECT
         WHEN (tweet.data->'possibly_sensitive')::boolean IS false THEN 'general'
     END rating,
     to_timestamp(tweet.data->>'created_at', 'DY Mon DD HH24:MI:SS +0000 YYYY') posted_at,
+    array[]::text[] tags,
     hashes.searched_hash,
     hashes.distance,
     null sha256
