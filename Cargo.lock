@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "fuzzysearch-dump"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-compression",
  "base64 0.21.0",
