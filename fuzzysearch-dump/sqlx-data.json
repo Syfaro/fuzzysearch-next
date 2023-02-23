@@ -144,6 +144,18 @@
     },
     "query": "SELECT\n    id,\n    data->>'owner' \"owner\",\n    hash,\n    data->>'posted_at' \"posted_at\",\n    sha256,\n    deleted,\n    data->'media'->'submission'->0->>'url' \"submission\"\nFROM\n    weasyl;\n"
   },
+  "696118c630b4db9bf80ded13273553578e7e195a374210416c5182b088109e0d": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "DELETE FROM\n    dump\nWHERE\n    url = $1;\n"
+  },
   "8ed6ad35a0274640bcecef484274515103da2c7d9f86721e44bd259c3c28c48d": {
     "describe": {
       "columns": [
@@ -197,5 +209,23 @@
       }
     },
     "query": "SELECT\n    id,\n    array(\n        select\n            jsonb_array_elements_text(data->'tags'->'artist')\n    ) \"artists\",\n    hash,\n    data->>'created_at' \"created_at\",\n    sha256,\n    deleted,\n    data->'file'->>'url' \"content_url\"\nFROM\n    e621;\n"
+  },
+  "c178483d8b40dd3f9c26afb0cc9a64d0d4c6d76e7024734d85fe5d04db4bfcfa": {
+    "describe": {
+      "columns": [
+        {
+          "name": "url",
+          "ordinal": 0,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "SELECT\n    url\nFROM\n    dump\nWHERE\n    created_at < current_timestamp - interval '14 days'\n    AND created_at <> (\n        SELECT\n            max(created_at)\n        FROM\n            dump\n    );\n"
   }
 }

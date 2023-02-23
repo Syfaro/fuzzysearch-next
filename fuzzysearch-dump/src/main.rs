@@ -249,5 +249,25 @@ async fn main() {
     .await
     .unwrap();
 
+    let needing_delete = sqlx::query_file_scalar!("queries/old_dumps.sql")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+    for url in needing_delete {
+        let path = url.split('/').last().expect("could not get path from url");
+        tracing::info!(path, "deleting old dump");
+
+        if let Err(err) = bucket.delete_object(path).await {
+            tracing::error!("could not delete object: {err}");
+            continue;
+        }
+
+        sqlx::query_file!("queries/delete_dump.sql", url)
+            .execute(&pool)
+            .await
+            .expect("could not delete dump from db");
+    }
+
     tracing::info!("completed");
 }
