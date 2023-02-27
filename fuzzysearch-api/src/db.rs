@@ -338,6 +338,8 @@ impl From<DbResult> for SearchResult {
             distance: Some(result.distance),
             searched_hash: Some(result.searched_hash),
             searched_hash_str: Some(result.searched_hash.to_string()),
+            deleted: None,
+            retrieved_at: None,
             site_info: match result.site.as_ref() {
                 "FurAffinity" => SiteInfo::FurAffinity {
                     file_id: result.file_id.unwrap_or_default(),
@@ -353,50 +355,126 @@ impl From<DbResult> for SearchResult {
     }
 }
 
-#[tracing::instrument(err, skip(bkapi, pool))]
+#[tracing::instrument(err, skip(bkapi, nats))]
 pub async fn lookup_hashes(
     bkapi: &BKApiClient,
-    pool: &PgPool,
+    nats: &async_nats::Client,
     hashes: &[i64],
     distance: u64,
+    refresh_days: Option<i64>,
 ) -> eyre::Result<Vec<SearchResult>> {
-    tracing::debug!(distance, "starting lookup for hashes: {:?}", hashes);
+    tracing::info!(distance, "starting lookup for hashes: {:?}", hashes);
 
     let bkapi_timer = BKAPI_TIME.start_timer();
     let related_hashes = bkapi.search_many(hashes, distance).await?;
-    tracing::trace!(
+    tracing::debug!(
         duration = bkapi_timer.stop_and_record(),
         "got results from bkapi"
     );
 
-    let search: Vec<_> = related_hashes
-        .into_iter()
-        .flat_map(|results| {
-            let searched_hash = results.hash;
+    let all_hashes: Vec<_> = related_hashes
+        .iter()
+        .flat_map(|results| results.hashes.iter())
+        .map(|search| search.hash.to_be_bytes())
+        .collect();
 
-            results.hashes.into_iter().map(move |result| HashSearch {
-                searched_hash,
-                found_hash: result.hash,
-                distance: result.distance,
+    let mut hash_lookup = HashMap::with_capacity(related_hashes.len());
+    for related_hash in related_hashes {
+        for found_hash in related_hash.hashes {
+            hash_lookup.insert(found_hash.hash, (related_hash.hash, found_hash.distance));
+        }
+    }
+
+    let req = FetchRequest {
+        query: SubmissionQuery::PerceptualHash { hashes: all_hashes },
+        policy: if let Some(days) = refresh_days {
+            FetchPolicy::Maybe {
+                older_than: chrono::Utc::now() - chrono::Duration::days(days),
+                return_stale: true,
+            }
+        } else {
+            FetchPolicy::Never
+        },
+    };
+    tracing::debug!("fetch policy: {:?}", req.policy);
+
+    let resp = nats
+        .request(
+            "fuzzysearch.loader.fetch".to_string(),
+            bytes::Bytes::from(serde_json::to_vec(&req)?),
+        )
+        .await
+        .map_err(|err| eyre::eyre!("request error: {err}"))?
+        .payload;
+    let resp: FetchResponse = serde_json::from_slice(&resp)?;
+
+    let results: Vec<_> = resp
+        .submissions
+        .into_iter()
+        .flat_map(|fetched_submission| match fetched_submission {
+            FetchedSubmission::Success { submission, .. } => Some(submission),
+            _ => None,
+        })
+        .flat_map(|submission| {
+            let media = submission.media.first()?;
+            let media_frame = media.frames.first()?;
+            let hash = i64::from_be_bytes(media_frame.perceptual_gradient?);
+            let hash_info = hash_lookup.get(&hash)?;
+
+            let site_info = match submission.site {
+                Site::FurAffinity => SiteInfo::FurAffinity {
+                    file_id: media
+                        .extra
+                        .clone()
+                        .unwrap_or_default()
+                        .get("file_id")
+                        .and_then(|file_id| file_id.as_str())
+                        .and_then(|file_id| file_id.parse().ok())
+                        .unwrap_or_default(),
+                },
+                Site::E621 => SiteInfo::E621 {
+                    sources: submission
+                        .extra
+                        .clone()
+                        .unwrap_or_default()
+                        .get("sources")
+                        .and_then(|sources| serde_json::from_value(sources.clone()).ok())
+                        .unwrap_or_default(),
+                },
+                Site::Weasyl => SiteInfo::Weasyl,
+                Site::Twitter => SiteInfo::Twitter,
+            };
+
+            Some(SearchResult {
+                site_id: submission.submission_id.parse().unwrap_or_default(),
+                site_id_str: submission.submission_id,
+                url: media.url.clone().unwrap_or_default(),
+                filename: media
+                    .extra
+                    .clone()
+                    .unwrap_or_default()
+                    .get("file_name")
+                    .and_then(|name| name.as_str())
+                    .map(|name| name.to_string())
+                    .unwrap_or_default(),
+                artists: Some(submission.artists),
+                rating: submission.rating,
+                posted_at: submission.posted_at,
+                tags: submission.tags,
+                sha256: media.file_sha256.as_ref().map(hex::encode),
+                hash: Some(hash),
+                hash_str: Some(hash.to_string()),
+                distance: Some(hash_info.1 as i64),
+                searched_hash: Some(hash_info.0),
+                searched_hash_str: Some(hash_info.0.to_string()),
+                deleted: Some(submission.deleted),
+                retrieved_at: submission.retrieved_at,
+                site_info,
             })
         })
         .collect();
-    tracing::trace!(count = search.len(), "looking up discovered hashes");
 
-    let database_timer = DATABASE_TIME.start_timer();
-    let results = sqlx::query_file_as!(
-        DbResult,
-        "queries/lookup_hashes.sql",
-        serde_json::to_value(search)?
-    )
-    .map(SearchResult::from)
-    .fetch_all(pool)
-    .await?;
-    tracing::trace!(
-        duration = database_timer.stop_and_record(),
-        count = results.len(),
-        "found hashes"
-    );
+    tracing::info!(len = results.len(), "found results");
 
     HASH_SEARCH_RESULTS.inc_by(results.len() as u64);
     GOOD_HASH_SEARCH_RESULTS.inc_by(

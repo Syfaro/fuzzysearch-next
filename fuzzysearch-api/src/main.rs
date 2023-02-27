@@ -1,5 +1,6 @@
 use std::{fmt::Display, net::SocketAddr, sync::Arc, time::Duration};
 
+use async_nats::ServerAddr;
 use axum::{
     async_trait,
     http::{header::HeaderName, Method, StatusCode},
@@ -55,6 +56,11 @@ struct Config {
     database_url: String,
 
     #[clap(long, env)]
+    nats_host: ServerAddr,
+    #[clap(long, env)]
+    nats_nkey: String,
+
+    #[clap(long, env)]
     session_secret: String,
     #[clap(long, env)]
     rp_id: String,
@@ -102,8 +108,13 @@ async fn main() -> eyre::Result<()> {
 
     foxlib::MetricsServer::serve(config.metrics_host, true).await;
 
-    let bkapi = BKApiClient::new(config.bkapi_endpoint);
     let pool = PgPool::connect(&config.database_url).await?;
+
+    let bkapi = BKApiClient::new(config.bkapi_endpoint);
+
+    let nats = async_nats::ConnectOptions::with_nkey(config.nats_nkey)
+        .connect(config.nats_host)
+        .await?;
 
     let client = reqwest::ClientBuilder::default()
         .timeout(Duration::from_secs(10))
@@ -125,12 +136,14 @@ async fn main() -> eyre::Result<()> {
     let api_layer = ServiceBuilder::new()
         .layer(cors)
         .layer(Extension(bkapi))
+        .layer(Extension(nats))
         .layer(Extension(client));
 
     let authenticated_api = Router::new()
         .route("/hashes", routing::get(api::search_image_by_hashes))
         .route("/image", routing::post(api::search_image_by_upload))
         .route("/url", routing::get(api::search_image_by_url))
+        .route("/submission", routing::post(api::lookup_submissions))
         .route(
             "/file/furaffinity",
             routing::get(api::lookup_furaffinity_file),

@@ -2,7 +2,7 @@ use axum::{
     extract::{Multipart, Path, Query},
     http::StatusCode,
     response::IntoResponse,
-    Extension, Json,
+    Extension, Json, Form,
 };
 use bkapi_client::BKApiClient;
 use bytes::BufMut;
@@ -26,12 +26,13 @@ use crate::{db, hash_image, ReportError};
         search_image_by_hashes,
         search_image_by_upload,
         search_image_by_url,
+        lookup_submissions,
         check_handle,
         lookup_furaffinity_file,
         dump_latest,
     ),
     components(
-        schemas(Service, UrlError, SearchResult, Rating, SiteInfo, Image, ImageError, FurAffinityFile)
+        schemas(Service, UrlError, SearchResult, Rating, SiteInfo, Image, ImageError, FurAffinityFile, Site, SubmissionFetchItem, FetchedSubmission, Submission, Media, MediaFrame, FetchStatus, SubmissionFetchForm)
     ),
     modifiers(&ApiTokenAddon),
     tags(
@@ -132,6 +133,7 @@ pub struct HashesQuery {
 pub async fn search_image_by_hashes(
     Extension(pool): Extension<PgPool>,
     Extension(bkapi): Extension<BKApiClient>,
+    Extension(nats): Extension<async_nats::Client>,
     Extension(api_key): Extension<db::UserApiKey>,
     Query(query): Query<HashesQuery>,
 ) -> Result<impl IntoResponse, ReportError> {
@@ -144,7 +146,7 @@ pub async fn search_image_by_hashes(
     let headers = rate_limit!(&pool, api_key, &[("image", hashes.len() as i16)]);
 
     let found_images =
-        db::lookup_hashes(&bkapi, &pool, &hashes, query.distance.unwrap_or(3)).await?;
+        db::lookup_hashes(&bkapi, &nats, &hashes, query.distance.unwrap_or(3), None).await?;
 
     Ok((StatusCode::OK, headers, Json(found_images)).into_response())
 }
@@ -176,6 +178,7 @@ enum ImageError {
 pub async fn search_image_by_upload(
     Extension(pool): Extension<PgPool>,
     Extension(bkapi): Extension<BKApiClient>,
+    Extension(nats): Extension<async_nats::Client>,
     Extension(api_key): Extension<db::UserApiKey>,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, ReportError> {
@@ -233,7 +236,7 @@ pub async fn search_image_by_upload(
     );
 
     tracing::debug!(count = hashes.len(), "hashed images in request");
-    let found_images = db::lookup_hashes(&bkapi, &pool, &hashes, distance).await?;
+    let found_images = db::lookup_hashes(&bkapi, &nats, &hashes, distance, None).await?;
 
     Ok((StatusCode::OK, headers, Json(found_images)).into_response())
 }
@@ -271,6 +274,7 @@ enum UrlError {
 pub async fn search_image_by_url(
     Extension(pool): Extension<PgPool>,
     Extension(bkapi): Extension<BKApiClient>,
+    Extension(nats): Extension<async_nats::Client>,
     Extension(client): Extension<reqwest::Client>,
     Extension(api_key): Extension<db::UserApiKey>,
     Query(query): Query<SearchByUrlQuery>,
@@ -335,9 +339,72 @@ pub async fn search_image_by_url(
     };
     tracing::trace!(hash, "hashed image at url");
 
-    let found_images = db::lookup_hashes(&bkapi, &pool, &[hash], 3).await?;
+    let found_images = db::lookup_hashes(&bkapi, &nats, &[hash], 3, None).await?;
 
     Ok((StatusCode::OK, headers, Json(found_images)).into_response())
+}
+
+#[derive(Debug, Serialize, Deserialize, IntoParams, ToSchema)]
+pub struct SubmissionFetchItem {
+    pub site: Site,
+    pub id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, IntoParams, ToSchema)]
+pub struct SubmissionFetchForm {
+    pub submissions: Vec<SubmissionFetchItem>,
+    pub refresh_after_days: Option<i64>,
+}
+
+/// Lookup submissions, re-fetching data if too old.
+#[utoipa::path(
+    post,
+    path = "/v1/submission",
+    request_body = SubmissionFetchForm,
+    responses(
+        (status = 200, description = "Image lookup completed successfully", body = [FetchedSubmission]),
+        (status = 429, description = "Rate limit exhausted"),
+        (status = 401, description = "Invalid or missing API token"),
+    ),
+    security(
+        ("api_key" = [])
+    )
+)]
+#[tracing::instrument(err, skip_all)]
+pub async fn lookup_submissions(
+    Extension(nats): Extension<async_nats::Client>,
+    Json(form): Json<SubmissionFetchForm>,
+) -> Result<impl IntoResponse, ReportError> {
+    let submission_ids = form
+        .submissions
+        .into_iter()
+        .map(|item| (item.site, item.id))
+        .collect();
+
+    let req = FetchRequest {
+        query: SubmissionQuery::SubmissionId { submission_ids },
+        policy: if let Some(days) = form.refresh_after_days {
+            FetchPolicy::Maybe {
+                older_than: chrono::Utc::now() - chrono::Duration::days(days),
+                return_stale: true,
+            }
+        } else {
+            FetchPolicy::Never
+        },
+    };
+    tracing::debug!("fetch policy: {:?}", req.policy);
+
+    let resp = nats
+        .request(
+            "fuzzysearch.loader.fetch".to_string(),
+            bytes::Bytes::from(serde_json::to_vec(&req)?),
+        )
+        .await
+        .map_err(|err| eyre::eyre!("request error: {err}"))?
+        .payload;
+    let resp: FetchResponse = serde_json::from_slice(&resp)?;
+
+    Ok((StatusCode::OK, Json(resp.submissions)))
 }
 
 #[derive(Debug, Serialize, Deserialize, IntoParams)]

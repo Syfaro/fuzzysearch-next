@@ -1593,6 +1593,7 @@ version = "0.2.5"
 dependencies = [
  "askama",
  "askama_axum",
+ "async-nats",
  "axum",
  "axum-sessions",
  "axum-tracing-opentelemetry",
@@ -1636,6 +1637,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",
+ "serde_json",
  "utoipa",
 ]
 
@@ -1703,6 +1705,7 @@ dependencies = [
  "eyre",
  "foxlib",
  "futures",
+ "fuzzysearch-common",
  "hex",
  "infer",
  "lazy_static",

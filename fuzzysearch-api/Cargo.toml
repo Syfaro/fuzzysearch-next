@@ -43,5 +43,6 @@ utoipa = { version = "3.0.2", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "3.0.1", features = ["axum"] }
 webauthn-rs = { version = "0.4.8", features = ["resident-key-support", "danger-allow-state-serialisation", "preview-features"] }
 webauthn-rs-proto = "0.4.8"
+async-nats = { version = "0.27.1", features = ["service"] }
 
 fuzzysearch-common = { path = "../fuzzysearch-common", features = ["api-types"] }
