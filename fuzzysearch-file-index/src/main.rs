@@ -817,6 +817,7 @@ async fn download_file(
     Ok(())
 }
 
+#[cfg(feature = "push-metrics")]
 fn push_metrics(config: &PrometheusConfig) {
     let host = match &config.prometheus_host {
         Some(host) => host,
@@ -839,3 +840,6 @@ fn push_metrics(config: &PrometheusConfig) {
 
     prometheus::push_metrics("fuzzysearch_file_index", labels! {}, host, metrics, auth).unwrap();
 }
+
+#[cfg(not(feature = "push-metrics"))]
+fn push_metrics(_config: &PrometheusConfig) {}

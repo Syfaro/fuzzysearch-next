@@ -98,6 +98,13 @@ pub struct SearchResult {
     /// A SHA256 of the contents of the image, if known.
     pub sha256: Option<String>,
 
+    /// If the submission appears to be deleted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<bool>,
+    /// When the submission was retrieved for the search index.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retrieved_at: Option<chrono::DateTime<chrono::Utc>>,
+
     /// The hash of the image.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hash: Option<i64>,
@@ -127,6 +134,16 @@ impl SearchResult {
             SiteInfo::Weasyl => "Weasyl",
             SiteInfo::Twitter => "Twitter",
             SiteInfo::Unknown => "Unknown",
+        }
+    }
+
+    pub fn site(&self) -> Site {
+        match &self.site_info {
+            SiteInfo::FurAffinity { .. } => Site::FurAffinity,
+            SiteInfo::E621 { .. } => Site::E621,
+            SiteInfo::Weasyl => Site::Weasyl,
+            SiteInfo::Twitter => Site::Twitter,
+            _ => panic!("unknown site"),
         }
     }
 
@@ -171,4 +188,187 @@ pub struct FurAffinityFile {
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     pub deleted: bool,
     pub tags: Vec<String>,
+}
+
+/// A site that the loader can fetch information from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[cfg_attr(feature = "api-types", derive(ToSchema))]
+pub enum Site {
+    #[serde(rename = "e621")]
+    E621,
+    FurAffinity,
+    Twitter,
+    Weasyl,
+}
+
+/// A submission.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "api-types", derive(ToSchema))]
+pub struct Submission {
+    /// The site where a submission resides.
+    pub site: Site,
+    /// The ID of the submission, as given by the site.
+    pub submission_id: String,
+    /// If the submission was deleted.
+    pub deleted: bool,
+    /// When the submission was posted.
+    pub posted_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// A link to the submission on the site.
+    pub link: String,
+    /// The title of the submission.
+    pub title: Option<String>,
+    /// The artists responsible for this submission.
+    pub artists: Vec<String>,
+    /// The tags on the submission.
+    pub tags: Vec<String>,
+    /// A description of the submission.
+    pub description: Option<String>,
+    /// The content rating of the submission.
+    pub rating: Option<Rating>,
+    /// Any media files associated with the submission.
+    pub media: Vec<Media>,
+    /// When the submission data was retrieved from the site.
+    pub retrieved_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Arbitrary extra data about the submission.
+    #[cfg_attr(feature = "api-types", schema(value_type = Object))]
+    pub extra: Option<serde_json::Value>,
+}
+
+/// Media from a submission.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "api-types", derive(ToSchema))]
+pub struct Media {
+    /// An ID for this media related to the submission.
+    ///
+    /// Not all sites use this.
+    pub site_id: Option<String>,
+    /// If the media was deleted.
+    pub deleted: bool,
+    /// The URL to this media.
+    pub url: Option<String>,
+    /// The SHA256 hash of the file.
+    pub file_sha256: Option<Vec<u8>>,
+    /// The size of the file.
+    pub file_size: Option<i64>,
+    /// The mime type of the file.
+    pub mime_type: Option<String>,
+    /// Any processed frames of this media.
+    pub frames: Vec<MediaFrame>,
+    /// Arbitrary extra data for this media on the related submission.
+    #[cfg_attr(feature = "api-types", schema(value_type = Object))]
+    pub extra: Option<serde_json::Value>,
+}
+
+/// A processed frame of some media.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "api-types", derive(ToSchema))]
+pub struct MediaFrame {
+    /// The index of the frame.
+    pub frame_index: i64,
+    /// A perceptual gradient hash of the frame.
+    pub perceptual_gradient: Option<[u8; 8]>,
+}
+
+impl std::fmt::Display for Site {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::E621 => "e621",
+            Self::FurAffinity => "FurAffinity",
+            Self::Twitter => "Twitter",
+            Self::Weasyl => "Weasyl",
+        };
+
+        write!(f, "{name}")
+    }
+}
+
+/// A request to load data from a site.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FetchRequest {
+    /// Selection for which submissions to load.
+    pub query: SubmissionQuery,
+    /// The policy to use for fetching submissions.
+    #[serde(default)]
+    pub policy: FetchPolicy,
+}
+
+/// The way to identify submissions to load.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubmissionQuery {
+    /// Load submissions for a site with the given IDs.
+    SubmissionId {
+        /// The site and ID of each submission to load.
+        submission_ids: Vec<(Site, String)>,
+    },
+    /// Load submissions that have a specific perceptual hash.
+    PerceptualHash {
+        /// The perceptual hashes to load.
+        hashes: Vec<[u8; 8]>,
+    },
+}
+
+/// The policy to use for fetching new data.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FetchPolicy {
+    /// Never fetch new data, only return what already is saved.
+    #[default]
+    Never,
+    /// Maybe fetch new data, if it's older than a given time.
+    Maybe {
+        /// Only fetch if previous was happened before this date.
+        older_than: chrono::DateTime<chrono::Utc>,
+        /// If stale data should be returned if it cannot be fetched.
+        #[serde(default)]
+        return_stale: bool,
+    },
+    /// Always fetch live data from the site.
+    ///
+    /// Prefer to use `Maybe` with a short date instead.
+    Always {
+        /// If stale data should be returned if it cannot be fetched.
+        #[serde(default)]
+        return_stale: bool,
+    },
+}
+
+/// A response from attempting to load data from a site.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FetchResponse {
+    /// The fetched submissions.
+    pub submissions: Vec<FetchedSubmission>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "api-types", derive(ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum FetchedSubmission {
+    // The submission was successfully loaded.
+    Success {
+        /// How the submission was fetched.
+        fetch_status: FetchStatus,
+        /// The submission data.
+        submission: Submission,
+    },
+    /// An error occured loading this submission.
+    Error {
+        /// The site for the requested submission.
+        site: Site,
+        /// The ID of the requested submission.
+        submission_id: String,
+        /// A message about why it failed to load.
+        message: Option<String>,
+    },
+}
+
+/// How the data was actually fetched.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "api-types", derive(ToSchema))]
+pub enum FetchStatus {
+    /// The value was fetched from the remote.
+    Fetched,
+    /// The value was retrieved from a cache.
+    Cached,
 }

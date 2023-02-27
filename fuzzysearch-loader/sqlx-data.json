@@ -1,0 +1,286 @@
+{
+  "db": "PostgreSQL",
+  "383c87f8b40dd48a44337596e6aab3f75088fa458ea5ad685bc59732706d36fc": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Bytea",
+          "Int8",
+          "Text",
+          "Bool"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    submissions.media (file_sha256, file_size, mime_type, single_frame)\nVALUES\n    ($1, $2, $3, $4) ON CONFLICT DO NOTHING RETURNING id;\n"
+  },
+  "608644a0995289288b1b59102850ea64df296de5feabfb971db0425e412197cb": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Text",
+          "Bool",
+          "Timestamptz",
+          "Text",
+          "Text",
+          "TextArray",
+          "TextArray",
+          "Text",
+          "Text",
+          "Timestamptz",
+          "Jsonb"
+        ]
+      }
+    },
+    "query": "INSERT INTO submissions.submission (site_id, site_submission_id, deleted, posted_at, link, title, artists, tags, description, rating, retrieved_at, extra)\n    VALUES ((SELECT id FROM submissions.site WHERE name = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)\n    ON CONFLICT (site_id, site_submission_id, content_hash)\n        DO UPDATE SET retrieved_at = EXCLUDED.retrieved_at\n    RETURNING id;\n"
+  },
+  "6cb6f0fbf9b2f5049546a0a4785600517a7c9542f3709fcab7daf753cd5d9306": {
+    "describe": {
+      "columns": [
+        {
+          "name": "name",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "site_submission_id",
+          "ordinal": 1,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Int8Array"
+        ]
+      }
+    },
+    "query": "SELECT\n\tDISTINCT ON (submission.site_id, submission.site_submission_id)\n\tsite.name,\n\tsubmission.site_submission_id\nFROM\n\tsubmissions.media_frame\n\tJOIN submissions.submission_media ON submission_media.media_id = media_frame.media_id\n    JOIN submissions.media ON media.id = submission_media.media_id\n\tJOIN submissions.submission ON submission.id = submission_media.submission_id\n\tJOIN submissions.site ON site.id = submission.site_id\nWHERE\n\tmedia_frame.perceptual_gradient = ANY($1)\n\tAND media_frame.perceptual_gradient IS NOT NULL\n    AND media.single_frame = true\nORDER BY\n\tsubmission.site_id,\n\tsubmission.site_submission_id,\n\tsubmission.retrieved_at DESC NULLS LAST;\n"
+  },
+  "80d75f792b545e2b8dacb62d5e1556eccb06816c5cae7ec8580be630791326a4": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Jsonb"
+        ]
+      }
+    },
+    "query": "INSERT INTO submissions.media_frame (media_id, frame_index, perceptual_gradient)\n    SELECT * FROM jsonb_to_recordset($1)\n        AS frame (media_id uuid, frame_index bigint, perceptual_gradient bigint)\n    ON CONFLICT DO NOTHING;\n"
+  },
+  "94641c11f4dff6d8a1fff1a9152b7a69bb458e7163cd5949c573378e84eb1ee5": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid",
+          "Uuid",
+          "Text",
+          "Text",
+          "Bool",
+          "Jsonb"
+        ]
+      }
+    },
+    "query": "INSERT INTO submissions.submission_media (submission_id, media_id, site_media_id, url, deleted, extra)\n    VALUES ($1, $2, $3, $4, $5, $6)\n    ON CONFLICT DO NOTHING\n    RETURNING id;\n"
+  },
+  "ba781fa64c44027f526e1741d002acd5a89d6d89b03ec0f8d36d91ffc113b9f6": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Bytea"
+        ]
+      }
+    },
+    "query": "SELECT\n    id\nFROM\n    submissions.media\nWHERE\n    file_sha256 IS NOT NULL\n    AND file_sha256 = $1;\n"
+  },
+  "fae01c93ab6d0f85116e2b0f43be2519b75084c7e2f26c79d1e604a7939defa4": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        },
+        {
+          "name": "site_name",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "site_submission_id",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "site_media_id",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "link",
+          "ordinal": 4,
+          "type_info": "Text"
+        },
+        {
+          "name": "title",
+          "ordinal": 5,
+          "type_info": "Text"
+        },
+        {
+          "name": "description",
+          "ordinal": 6,
+          "type_info": "Text"
+        },
+        {
+          "name": "media_url",
+          "ordinal": 7,
+          "type_info": "Text"
+        },
+        {
+          "name": "submission_media_extra",
+          "ordinal": 8,
+          "type_info": "Jsonb"
+        },
+        {
+          "name": "file_sha256",
+          "ordinal": 9,
+          "type_info": "Bytea"
+        },
+        {
+          "name": "artists",
+          "ordinal": 10,
+          "type_info": "TextArray"
+        },
+        {
+          "name": "rating",
+          "ordinal": 11,
+          "type_info": "Text"
+        },
+        {
+          "name": "posted_at",
+          "ordinal": 12,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "tags",
+          "ordinal": 13,
+          "type_info": "TextArray"
+        },
+        {
+          "name": "deleted",
+          "ordinal": 14,
+          "type_info": "Bool"
+        },
+        {
+          "name": "retrieved_at",
+          "ordinal": 15,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "extra",
+          "ordinal": 16,
+          "type_info": "Jsonb"
+        },
+        {
+          "name": "perceptual_gradient",
+          "ordinal": 17,
+          "type_info": "Int8"
+        },
+        {
+          "name": "media_id?",
+          "ordinal": 18,
+          "type_info": "Uuid"
+        },
+        {
+          "name": "file_size",
+          "ordinal": 19,
+          "type_info": "Int8"
+        },
+        {
+          "name": "mime_type",
+          "ordinal": 20,
+          "type_info": "Text"
+        },
+        {
+          "name": "frame_index?",
+          "ordinal": 21,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        null,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Jsonb"
+        ]
+      }
+    },
+    "query": "WITH search_query AS (\n    SELECT\n        site.id site_id,\n        query.submission_id\n    FROM jsonb_to_recordset($1)\n        AS query (site_name TEXT, submission_id TEXT)\n    JOIN submissions.site ON site.name = query.site_name\n)\nSELECT\n\tDISTINCT ON (submission.site_id, submission.site_submission_id, submission_media.site_media_id)\n\tsubmission.id,\n\tsite.name site_name,\n\tsubmission.site_submission_id,\n\tsubmission_media.site_media_id,\n\tsubmission.link,\n\tsubmission.title,\n\tsubmission.description,\n\tsubmission_media.url media_url,\n\tsubmission_media.extra submission_media_extra,\n\tmedia.file_sha256 file_sha256,\n\tsubmission.artists,\n\tsubmission.rating,\n\tsubmission.posted_at,\n\tsubmission.tags,\n\t(submission.deleted OR submission_media.deleted) deleted,\n\tsubmission.retrieved_at,\n\tsubmission.extra,\n\tmedia_frame.perceptual_gradient,\n\tmedia.id \"media_id?\",\n\tmedia.file_size,\n\tmedia.mime_type,\n\tmedia_frame.frame_index \"frame_index?\"\nFROM search_query\n    JOIN submissions.submission ON submission.site_id = search_query.site_id AND submission.site_submission_id = search_query.submission_id\n\tJOIN submissions.site ON site.id = submission.site_id\n\tLEFT JOIN submissions.submission_media ON submission_media.submission_id = submission.id\n\tLEFT JOIN submissions.media ON media.id = submission_media.media_id\n\tLEFT JOIN submissions.media_frame ON media_frame.media_id = media.id\nORDER BY\n\tsubmission.site_id,\n\tsubmission.site_submission_id,\n\tsubmission_media.site_media_id,\n\tsubmission.retrieved_at DESC NULLS LAST\n"
+  }
+}

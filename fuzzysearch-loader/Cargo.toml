@@ -1,0 +1,49 @@
+[package]
+name = "fuzzysearch-loader"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-nats = { version = "0.27.1", features = ["service"] }
+bytes = "1.4.0"
+chrono = { version = "0.4.23", features = ["serde"] }
+clap = { version = "4.1.6", features = ["derive", "env"] }
+dotenvy = "0.15.6"
+eyre = "0.6.8"
+foxlib = { git = "https://github.com/Syfaro/foxlib.git", features = ["hash"]}
+futures = "0.3.26"
+serde = { version = "1.0.152", features = ["derive"] }
+serde_json = "1.0.93"
+tokio = { version = "1.25.0", features = ["macros"] }
+tracing = "0.1.37"
+enum_dispatch = "0.3.11"
+async-trait = "0.1.64"
+tap = "1.0.1"
+sha2 = "0.10.6"
+hex = "0.4.3"
+infer = "0.12.0"
+uuid = { version = "1.3.0", features = ["v4", "serde"] }
+serde_plain = "1.0.1"
+lazy_static = "1.4.0"
+scraper = "0.14.0"
+regex = "1.7.1"
+thiserror = "1.0.38"
+
+fuzzysearch-common = { path = "../fuzzysearch-common" }
+
+[dependencies.reqwest]
+version = "0.11.14"
+default-features = false
+features = ["rustls-tls", "json"]
+
+[dependencies.sqlx]
+version = "0.6.2"
+features = [
+    "chrono",
+    "json",
+    "macros",
+    "offline",
+    "postgres",
+    "runtime-tokio-rustls",
+    "uuid",
+]

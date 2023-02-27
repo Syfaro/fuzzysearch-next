@@ -4,7 +4,8 @@ members = [
     "fuzzysearch-api",
     "fuzzysearch-file-index",
     "fuzzysearch-dump",
-    "fuzzysearch-web"
+    "fuzzysearch-web",
+    "fuzzysearch-loader",
 ]
 
 [workspace.metadata.release]
