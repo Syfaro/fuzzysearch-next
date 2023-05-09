@@ -11,7 +11,7 @@ use fuzzysearch_common::{
 use sqlx::PgPool;
 use tap::TapFallible;
 
-use crate::sites::{LoadSubmissions, LoadableSites, SubmissionResult};
+use crate::sites::{BoxSite, LoadSubmissions, SubmissionResult};
 
 async fn load_submissions(
     pool: &PgPool,
@@ -50,7 +50,7 @@ async fn load_submissions(
 #[tracing::instrument(skip_all)]
 pub async fn handle_fetch(
     pool: PgPool,
-    sites: Arc<Vec<LoadableSites>>,
+    sites: Arc<Vec<BoxSite>>,
     message: &Message,
 ) -> Result<Bytes, async_nats::service::error::Error> {
     let req: FetchRequest = serde_json::from_slice(&message.payload).map_err(|err| {

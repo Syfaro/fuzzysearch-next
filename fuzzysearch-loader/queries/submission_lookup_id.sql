@@ -40,4 +40,5 @@ ORDER BY
 	submission.site_id,
 	submission.site_submission_id,
 	submission_media.site_media_id,
+	media_frame.frame_index,
 	submission.retrieved_at DESC NULLS LAST

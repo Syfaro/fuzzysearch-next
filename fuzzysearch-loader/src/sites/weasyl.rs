@@ -1,19 +1,35 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
+use futures::{StreamExt, TryStreamExt};
 use fuzzysearch_common::{Rating, Site, Submission};
 use serde::Deserialize;
 
-use crate::sites::{process_image, LoadableSite, SubmissionResult};
+use crate::{
+    sites::{process_file, LoadableSite, SubmissionResult},
+    SiteConfig,
+};
 
 pub struct Weasyl {
     pub api_key: String,
+    download_path: Option<PathBuf>,
     client: reqwest::Client,
+    pool: sqlx::PgPool,
 }
 
 impl Weasyl {
-    pub fn new(api_key: String, client: reqwest::Client) -> Self {
-        Self { api_key, client }
+    pub fn new(
+        site_config: SiteConfig,
+        api_key: String,
+        client: reqwest::Client,
+        pool: sqlx::PgPool,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            api_key,
+            download_path: site_config.download_path,
+            client,
+            pool,
+        })
     }
 
     #[tracing::instrument(skip(self))]
@@ -100,7 +116,9 @@ impl Weasyl {
         let mut submission_media = Vec::with_capacity(1);
         for media in sub.media.remove("submission").unwrap_or_default() {
             tracing::debug!(id = media.mediaid, "processing media");
-            let image = match process_image(
+            let image = match process_file(
+                &self.pool,
+                &self.download_path,
                 &self.client,
                 Some(media.mediaid.to_string()),
                 &media.url,
@@ -149,14 +167,10 @@ impl LoadableSite for Weasyl {
     async fn load(&self, ids: Vec<&str>) -> eyre::Result<Vec<SubmissionResult>> {
         tracing::info!("starting to load submissions");
 
-        let mut submissions = Vec::with_capacity(ids.len());
-
-        for id in ids {
-            let submission = self.load_submission(id).await?;
-            submissions.push(submission);
-        }
-
-        Ok(submissions)
+        futures::stream::iter(ids)
+            .then(|id| self.load_submission(id))
+            .try_collect()
+            .await
     }
 }
 

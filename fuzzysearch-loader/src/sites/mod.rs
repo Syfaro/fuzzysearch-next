@@ -1,24 +1,50 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Seek, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
-use enum_dispatch::enum_dispatch;
 use eyre::eyre;
 use foxlib::hash::image::AnimationDecoder;
 use futures::{stream::FuturesUnordered, TryStreamExt};
 use fuzzysearch_common::{Media, MediaFrame, Site, Submission};
+use lazy_static::lazy_static;
+use prometheus::{
+    register_histogram_vec, register_int_counter_vec, HistogramOpts, HistogramVec, IntCounterVec,
+    Opts,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
-use tap::TapOptional;
+use tap::{TapFallible, TapOptional};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::{
-    sites::{furaffinity::FurAffinity, weasyl::Weasyl},
+    sites::{e621::E621, furaffinity::FurAffinity, twitter::Twitter, weasyl::Weasyl},
     Config,
 };
 
+mod e621;
 mod furaffinity;
+mod twitter;
 mod weasyl;
+
+lazy_static! {
+    static ref FETCH_ERRORS: IntCounterVec = register_int_counter_vec!(
+        Opts::new(
+            "fuzzysearch_watcher_fetch_errors",
+            "Number of errors fetching submissions."
+        ),
+        &["site"]
+    )
+    .unwrap();
+    static ref FETCHED_SUBMISSIONS: HistogramVec = register_histogram_vec!(
+        HistogramOpts::new(
+            "fuzzysearch_watcher_fetched_submissions",
+            "Number of submissions fetched on each site."
+        ),
+        &["site"]
+    )
+    .unwrap();
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum SubmissionResult {
@@ -30,16 +56,10 @@ pub enum SubmissionResult {
     },
 }
 
-/// An enum representing each loadable site.
-#[enum_dispatch]
-pub enum LoadableSites {
-    FurAffinity,
-    Weasyl,
-}
+pub type BoxSite = Box<Arc<dyn LoadableSite + Send + Sync>>;
 
 /// All of the methods required to load a submission from a site.
 #[async_trait]
-#[enum_dispatch(LoadableSites)]
 pub trait LoadableSite {
     /// The site it's loading from.
     fn site(&self) -> Site;
@@ -52,25 +72,57 @@ pub trait LoadableSite {
 }
 
 /// Get all of the sites.
-pub fn sites(config: &Config, client: reqwest::Client) -> Vec<LoadableSites> {
-    let mut sites: Vec<LoadableSites> = Vec::with_capacity(4);
+pub async fn sites(config: &Config, client: reqwest::Client, pool: PgPool) -> Vec<BoxSite> {
+    let mut sites: Vec<BoxSite> = Vec::with_capacity(4);
 
     if let (Some(cookie_a), Some(cookie_b)) = (
         config.furaffinity_cookie_a.as_ref(),
         config.furaffinity_cookie_b.as_ref(),
     ) {
         tracing::info!("adding furaffinity");
-        sites.push(FurAffinity::new(client.clone(), cookie_a.clone(), cookie_b.clone()).into())
+        let fa = FurAffinity::new(
+            config.site(),
+            cookie_a.clone(),
+            cookie_b.clone(),
+            config.furaffinity_bot_threshold,
+            client.clone(),
+            pool.clone(),
+        )
+        .await;
+        sites.push(Box::new(fa))
     }
 
     if let Some(weasyl_api_token) = config.weasyl_api_token.as_ref() {
         tracing::info!("adding weasyl");
-        sites.push(Weasyl::new(weasyl_api_token.clone(), client).into())
+        let weasyl = Weasyl::new(
+            config.site(),
+            weasyl_api_token.clone(),
+            client.clone(),
+            pool.clone(),
+        );
+        sites.push(Box::new(weasyl));
     }
 
-    if sites.is_empty() {
-        tracing::error!("no sites are registered");
+    if let (Some(e621_login), Some(e621_api_token)) =
+        (config.e621_login.as_ref(), config.e621_api_token.as_ref())
+    {
+        tracing::info!("adding e621");
+        let e621 = E621::new(
+            config.site(),
+            e621_login.clone(),
+            e621_api_token.clone(),
+            client.clone(),
+            pool.clone(),
+        );
+        sites.push(Box::new(e621));
     }
+
+    tracing::info!("adding twitter");
+    sites.push(Box::new(Twitter::new(
+        client,
+        config.download_path.clone(),
+        pool.clone(),
+    )));
 
     sites
 }
@@ -84,7 +136,7 @@ pub trait LoadSubmissions {
 }
 
 #[async_trait]
-impl LoadSubmissions for &[LoadableSites] {
+impl LoadSubmissions for &[BoxSite] {
     async fn load_submissions(
         &self,
         submission_ids: &[(Site, String)],
@@ -126,34 +178,124 @@ impl LoadSubmissions for &[LoadableSites] {
     }
 }
 
-#[tracing::instrument(skip(client, site_id))]
-pub async fn process_image(
+#[tracing::instrument(skip(pool, download_path, client, site_id))]
+pub async fn process_file(
+    pool: &PgPool,
+    download_path: &Option<PathBuf>,
     client: &reqwest::Client,
     site_id: Option<String>,
     url: &str,
 ) -> eyre::Result<Media> {
     tracing::info!("attempting to download image");
 
-    let buf = client.get(url).send().await?.bytes().await?;
-    let file_size = buf.len() as i64;
-    tracing::debug!("file size: {file_size}");
+    const MAX_DOWNLOAD_SIZE: usize = 2_000_000_000;
 
-    let sha256 = Sha256::digest(&buf);
+    let mut req = client.get(url).send().await?;
+
+    let named_file = tempfile::NamedTempFile::new()?;
+    let (file, path) = named_file.into_parts();
+    tracing::trace!("got temp path {}", path.to_string_lossy());
+
+    let mut file = tokio::fs::File::from_std(file);
+    let mut file_size = 0;
+
+    let mut sha256 = Sha256::new();
+    let mut head = bytes::BytesMut::with_capacity(8192);
+
+    while let Ok(Some(chunk)) = req.chunk().await {
+        let new_len = chunk.len() + file_size;
+        if new_len > MAX_DOWNLOAD_SIZE {
+            tracing::warn!("file was at least {new_len} bytes");
+            eyre::bail!("file was greater than max download size");
+        }
+
+        let needed_head_bytes = 8192 - head.len();
+        if !chunk.is_empty() && needed_head_bytes > 0 {
+            head.extend(&chunk[..needed_head_bytes.clamp(1, chunk.len())]);
+        }
+
+        file_size += chunk.len();
+        sha256.update(&chunk);
+        file.write_all(&chunk).await?;
+    }
+
+    tracing::debug!("file was {file_size} bytes");
+
+    let sha256 = sha256.finalize();
     tracing::debug!("sha256 hash: {}", hex::encode(sha256));
 
-    let mime_type = infer::get(&buf).map(|typ| typ.mime_type().to_string());
-    tracing::debug!("mime type: {mime_type:?}");
+    let mime_type = infer::get(&head)
+        .map(|typ| typ.mime_type().to_string())
+        .tap_none(|| tracing::warn!("could not guess mime type"))
+        .tap_some(|mime_type| tracing::debug!(mime_type, "got mime type"));
 
-    let hashing_span = tracing::info_span!("load_and_hash_image", len = buf.len());
+    if let Ok(Some(media)) =
+        sqlx::query_file!("queries/media_lookup_sha256_full.sql", sha256.to_vec())
+            .fetch_optional(pool)
+            .await
+    {
+        tracing::info!("already had media for this hash, skipping processing");
+
+        return Ok(Media {
+            site_id,
+            deleted: false,
+            url: Some(url.to_string()),
+            file_sha256: Some(sha256.to_vec()),
+            file_size: Some(file_size as i64),
+            mime_type,
+            frames: media
+                .perceptual_gradient
+                .map(|hash| MediaFrame {
+                    frame_index: 0,
+                    perceptual_gradient: Some(hash.to_be_bytes()),
+                })
+                .into_iter()
+                .collect(),
+            extra: None,
+        });
+    }
+
+    if let Some(download_path) = download_path {
+        let sha256_hex = hex::encode(sha256);
+        let dir = download_path
+            .join(&sha256_hex[0..2])
+            .join(&sha256_hex[2..4]);
+        if !dir.exists() {
+            let _ = tokio::fs::create_dir_all(&dir).await;
+        }
+        let path = dir.join(sha256_hex);
+        tracing::debug!("writing image to {}", path.to_string_lossy());
+
+        match tokio::fs::File::create(path).await {
+            Ok(mut download) => {
+                file.rewind().await?;
+                if let Err(err) = tokio::io::copy(&mut file, &mut download).await {
+                    tracing::error!("could not write file: {err}");
+                }
+            }
+            Err(err) => tracing::error!("could not create file: {err}"),
+        }
+    }
+
+    file.rewind().await?;
+    let mut file = file.into_std().await;
+
+    let hashing_span = tracing::info_span!("load_and_hash_image");
     let frames = tokio::task::spawn_blocking(move || {
         let _entered = hashing_span.enter();
         let hasher = foxlib::hash::ImageHasher::default();
 
-        if infer::is(&buf, "gif") {
-            tracing::debug!("mime type suggests gif");
-            let cursor = std::io::Cursor::new(&buf);
+        if infer::is_video(&head) {
+            tracing::debug!("mime type suggests video");
+            match decode_video(&path) {
+                Ok(frames) => return Some(frames),
+                Err(err) => tracing::warn!("could not be decoded as video: {err}"),
+            }
+        }
 
-            if let Ok(gif) = foxlib::hash::image::codecs::gif::GifDecoder::new(cursor) {
+        if infer::is(&head, "gif") {
+            tracing::debug!("mime type suggests gif");
+            if let Ok(gif) = foxlib::hash::image::codecs::gif::GifDecoder::new(&file) {
                 let hashes: Vec<_> = gif
                     .into_frames()
                     .filter_map(Result::ok)
@@ -163,10 +305,26 @@ pub async fn process_image(
 
                 return Some(hashes);
             }
+
+            tracing::warn!("could not be decoded as gif");
+            file.rewind()
+                .tap_err(|err| tracing::error!("could not rewind image: {err}"))
+                .ok()?;
         }
 
-        let im = foxlib::hash::image::load_from_memory(&buf).ok()?;
+        let file = std::io::BufReader::new(file);
+        let im = foxlib::hash::image::io::Reader::new(file)
+            .with_guessed_format()
+            .tap_err(|err| tracing::error!("could not guess format: {err}"))
+            .ok()?
+            .decode()
+            .tap_err(|err| tracing::error!("could not decode image: {err}"))
+            .ok()?;
         tracing::info!("loaded static image");
+
+        if let Err(err) = path.close() {
+            tracing::error!("could not close path: {err}");
+        }
 
         Some(vec![hasher.hash_image(&im)])
     })
@@ -187,11 +345,81 @@ pub async fn process_image(
         deleted: false,
         url: Some(url.to_string()),
         file_sha256: Some(sha256.to_vec()),
-        file_size: Some(file_size),
+        file_size: Some(file_size as i64),
         mime_type,
         frames,
         extra: None,
     })
+}
+
+fn decode_video(path: &tempfile::TempPath) -> eyre::Result<Vec<foxlib::hash::ImageHash>> {
+    use ffmpeg_next::{
+        codec, decoder,
+        format::{self, input},
+        media,
+        software::scaling,
+        util::frame,
+    };
+    use foxlib::hash::{self, image};
+
+    let mut ictx = input(&path)?;
+    let input = ictx
+        .streams()
+        .best(media::Type::Video)
+        .ok_or(ffmpeg_next::Error::StreamNotFound)?;
+    let video_stream_index = input.index();
+
+    let context_decoder = codec::Context::from_parameters(input.parameters())?;
+    let mut decoder = context_decoder.decoder().video()?;
+
+    let mut scaler = scaling::Context::get(
+        decoder.format(),
+        decoder.width(),
+        decoder.height(),
+        format::Pixel::RGB24,
+        decoder.width(),
+        decoder.height(),
+        scaling::Flags::BILINEAR,
+    )?;
+
+    let hasher = hash::ImageHasher::default();
+    let mut hashes = Vec::new();
+    let mut frame_index = 0;
+
+    let mut receive_and_process_decoded_frames =
+        |decoder: &mut decoder::Video| -> Result<(), ffmpeg_next::Error> {
+            let mut decoded = frame::Video::empty();
+
+            while decoder.receive_frame(&mut decoded).is_ok() {
+                let mut rgb_frame = frame::Video::empty();
+                scaler.run(&decoded, &mut rgb_frame)?;
+                if frame_index % 100 == 0 {
+                    tracing::trace!(frame_index, "decoded and scaled frame");
+                }
+
+                let data = rgb_frame.data(0).to_vec();
+                let im: image::RgbImage =
+                    image::ImageBuffer::from_raw(decoder.width(), decoder.height(), data)
+                        .ok_or(ffmpeg_next::Error::InvalidData)?;
+
+                hashes.push(hasher.hash_image(&im));
+                frame_index += 1;
+            }
+
+            tracing::debug!(frame_count = frame_index, "finished video decode");
+            Ok(())
+        };
+
+    for (stream, packet) in ictx.packets() {
+        if stream.index() == video_stream_index {
+            decoder.send_packet(&packet)?;
+            receive_and_process_decoded_frames(&mut decoder)?;
+        }
+    }
+    decoder.send_eof()?;
+    receive_and_process_decoded_frames(&mut decoder)?;
+
+    Ok(hashes)
 }
 
 #[tracing::instrument(skip_all)]
