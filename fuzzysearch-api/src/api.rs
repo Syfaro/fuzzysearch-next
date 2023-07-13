@@ -2,7 +2,7 @@ use axum::{
     extract::{Multipart, Path, Query},
     http::StatusCode,
     response::IntoResponse,
-    Extension, Json, Form,
+    Extension, Json,
 };
 use bkapi_client::BKApiClient;
 use bytes::BufMut;
@@ -68,6 +68,11 @@ macro_rules! rate_limit {
 }
 
 #[derive(Debug, Serialize, Deserialize, IntoParams)]
+pub struct HandlePath {
+    service: Service,
+}
+
+#[derive(Debug, Serialize, Deserialize, IntoParams)]
 pub struct HandleQuery {
     /// The handle to search for, case-insensitive.
     handle: String,
@@ -81,17 +86,17 @@ pub struct HandleQuery {
         (status = 200, description = "Handle looked up successfully", body = bool),
     ),
     params(
-        ("service" = Service, Path, description = "Service to check handle"),
+        HandlePath,
         HandleQuery,
     )
 )]
 #[tracing::instrument(err, skip_all, fields(handle = query.handle))]
 pub async fn check_handle(
     Extension(pool): Extension<PgPool>,
-    Path(service): Path<Service>,
+    Path(path): Path<HandlePath>,
     Query(query): Query<HandleQuery>,
 ) -> Result<impl IntoResponse, ReportError> {
-    let exists = match service {
+    let exists = match path.service {
         Service::Twitter => {
             sqlx::query_file_scalar!("queries/check_handle_twitter.sql", query.handle)
                 .fetch_one(&pool)

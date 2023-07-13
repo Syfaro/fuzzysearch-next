@@ -13,4 +13,4 @@ publish = false
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.93"
 chrono = { version = "0.4.23", features = ["serde"] }
-utoipa = { version = "3.0.2", optional = true }
+utoipa = { version = "3.4.0", optional = true }

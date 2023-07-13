@@ -11,7 +11,7 @@ use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
 use image::GenericImageView;
 use lazy_static::lazy_static;
-use prometheus::{labels, register_counter, register_histogram, Counter, Histogram};
+use prometheus::{register_counter, register_histogram, Counter, Histogram};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -564,7 +564,6 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
             .read_from_container(&mut file)
             .map(|exif| {
                 exif.fields()
-                    .into_iter()
                     .map(|field| ExifEntry {
                         tag_number: field.tag.number(),
                         tag_description: field.tag.description().map(ToString::to_string),

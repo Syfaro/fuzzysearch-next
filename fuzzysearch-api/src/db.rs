@@ -457,7 +457,13 @@ pub async fn lookup_hashes(
                     .and_then(|name| name.as_str())
                     .map(|name| name.to_string())
                     .unwrap_or_default(),
-                artists: Some(submission.artists),
+                artists: Some(
+                    submission
+                        .artists
+                        .into_iter()
+                        .map(|artist| artist.name)
+                        .collect(),
+                ),
                 rating: submission.rating,
                 posted_at: submission.posted_at,
                 tags: submission.tags,
