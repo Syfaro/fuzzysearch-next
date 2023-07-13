@@ -18,7 +18,13 @@ SELECT
 	submission_media.url media_url,
 	submission_media.extra submission_media_extra,
 	media.file_sha256 file_sha256,
-	submission.artists,
+	(
+		SELECT
+			jsonb_agg(jsonb_build_object('name', artist.display_name, 'link', artist.link))
+		FROM submissions.submission_artist
+			JOIN submissions.artist ON artist.id = submission_artist.artist_id
+		WHERE submission_artist.submission_id = submission.id
+	) artists,
 	submission.rating,
 	submission.posted_at,
 	submission.tags,

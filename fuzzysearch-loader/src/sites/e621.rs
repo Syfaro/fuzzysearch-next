@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
-use fuzzysearch_common::{Rating, Site, Submission};
+use fuzzysearch_common::{Artist, Rating, Site, Submission};
 use serde::Deserialize;
 
 use crate::{
@@ -116,6 +116,11 @@ impl E621 {
                 .filter(|(category, _tags)| category == "artist")
                 .flat_map(|(_category, tags)| tags.into_iter())
                 .filter(|tag| !INVALID_ARTISTS.contains(&tag.as_str()))
+                .map(|tag| Artist {
+                    site_artist_id: tag.clone(),
+                    name: tag,
+                    link: None,
+                })
                 .collect(),
             tags: post.tags.into_values().flatten().collect(),
             description: post.description,

@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
-use fuzzysearch_common::{Rating, Site, Submission};
+use fuzzysearch_common::{Artist, Rating, Site, Submission};
 use serde::Deserialize;
 
 use crate::{
@@ -144,7 +144,11 @@ impl Weasyl {
             posted_at: Some(sub.posted_at),
             link: sub.link,
             title: Some(sub.title),
-            artists: vec![sub.owner_login],
+            artists: vec![Artist {
+                link: Some(format!("https://www.weasyl.com/~{}", sub.owner_login)),
+                site_artist_id: sub.owner_login.clone(),
+                name: sub.owner_login,
+            }],
             tags: sub.tags,
             description: Some(sub.description),
             rating: Some(sub.rating.normalized()),

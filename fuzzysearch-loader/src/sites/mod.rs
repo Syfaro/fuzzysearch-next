@@ -520,6 +520,19 @@ async fn link_submission_media(
 pub async fn insert_submission(conn: &PgPool, submission: &Submission) -> eyre::Result<Uuid> {
     let mut tx = conn.begin().await?;
 
+    let futs = submission.artists.iter().map(|artist| {
+        sqlx::query_file_scalar!(
+            "queries/artist_insert.sql",
+            submission.site.to_string(),
+            artist.site_artist_id,
+            artist.name,
+            artist.link
+        )
+        .fetch_one(conn)
+    });
+
+    let artist_ids = futures::future::try_join_all(futs).await?;
+
     let submission_id = sqlx::query_file_scalar!(
         "queries/submission_insert.sql",
         submission.site.to_string(),
@@ -528,7 +541,6 @@ pub async fn insert_submission(conn: &PgPool, submission: &Submission) -> eyre::
         submission.posted_at,
         submission.link,
         submission.title,
-        &submission.artists,
         &submission.tags,
         submission.description,
         submission
@@ -539,6 +551,23 @@ pub async fn insert_submission(conn: &PgPool, submission: &Submission) -> eyre::
         submission.extra,
     )
     .fetch_one(&mut tx)
+    .await?;
+
+    let submission_artist_ids: Vec<_> = artist_ids
+        .into_iter()
+        .map(|artist_id| {
+            serde_json::json!({
+                "submission_id": submission_id,
+                "artist_id": artist_id,
+            })
+        })
+        .collect();
+
+    sqlx::query_file!(
+        "queries/submission_associate_artists.sql",
+        serde_json::Value::Array(submission_artist_ids)
+    )
+    .execute(&mut tx)
     .await?;
 
     for media in &submission.media {
@@ -562,7 +591,7 @@ pub struct DbSubmission {
     pub description: Option<String>,
     pub media_url: Option<String>,
     pub file_sha256: Option<Vec<u8>>,
-    pub artists: Option<Vec<String>>,
+    pub artists: Option<serde_json::Value>,
     pub rating: Option<String>,
     pub posted_at: Option<chrono::DateTime<chrono::Utc>>,
     pub tags: Option<Vec<String>>,
@@ -632,7 +661,14 @@ pub fn collapse_db_submissions(
                 posted_at: db_submission.posted_at,
                 link: db_submission.link,
                 title: db_submission.title,
-                artists: db_submission.artists.unwrap_or_default(),
+                artists: db_submission
+                    .artists
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .tap_err(|err| tracing::error!("could not deserialize artists: {err}"))
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
                 tags: db_submission.tags.unwrap_or_default(),
                 description: db_submission.description,
                 rating,

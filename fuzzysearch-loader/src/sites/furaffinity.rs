@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use chrono::TimeZone;
 use eyre::ContextCompat;
 use futures::{StreamExt, TryStreamExt};
-use fuzzysearch_common::{Rating, Site};
+use fuzzysearch_common::{Artist, Rating, Site};
 use lazy_static::lazy_static;
 use prometheus::{register_int_gauge, register_int_gauge_vec, IntGauge, IntGaugeVec, Opts};
 use regex::Regex;
@@ -672,7 +672,11 @@ fn parse_submission(
             posted_at: Some(posted_at),
             link: url,
             title: Some(title),
-            artists: vec![artist],
+            artists: vec![Artist {
+                link: Some(format!("https://www.furaffinity.net/user/{artist}/")),
+                site_artist_id: artist.clone(),
+                name: artist,
+            }],
             tags,
             description: Some(description),
             rating: rating.map(|rating| rating.normalized()),

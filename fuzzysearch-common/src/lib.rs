@@ -201,6 +201,20 @@ pub enum Site {
     Weasyl,
 }
 
+/// An artist on a site.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "api-types", derive(ToSchema))]
+pub struct Artist {
+    /// An ID for the artist on the site. Often just their username.
+    #[serde(skip)]
+    pub site_artist_id: String,
+
+    /// The artist's name.
+    pub name: String,
+    /// A link to the artist's page, if one exists.
+    pub link: Option<String>,
+}
+
 /// A submission.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
@@ -218,7 +232,7 @@ pub struct Submission {
     /// The title of the submission.
     pub title: Option<String>,
     /// The artists responsible for this submission.
-    pub artists: Vec<String>,
+    pub artists: Vec<Artist>,
     /// The tags on the submission.
     pub tags: Vec<String>,
     /// A description of the submission.

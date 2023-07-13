@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::TimeZone;
 use eyre::ContextCompat;
 use futures::{StreamExt, TryStreamExt};
-use fuzzysearch_common::{Rating, Site, Submission};
+use fuzzysearch_common::{Artist, Rating, Site, Submission};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use sqlx::PgPool;
 use tokio::sync::RwLock;
@@ -202,7 +202,7 @@ impl Twitter {
                     &self.pool,
                     &self.download_path,
                     &self.client,
-                    Some(media["id_str"].to_string()),
+                    media["id_str"].as_str().map(|id| id.to_string()),
                     media["media_url_https"]
                         .as_str()
                         .context("media url was not string")?,
@@ -220,7 +220,11 @@ impl Twitter {
             link: format!("https://twitter.com/{screen_name}/status/{id}"),
             posted_at,
             title: None,
-            artists: vec![screen_name.to_string()],
+            artists: vec![Artist {
+                site_artist_id: user_id.to_string(),
+                name: screen_name.to_string(),
+                link: Some(format!("https://twitter.com/{screen_name}")),
+            }],
             tags: hashtags,
             description: tweet["full_text"].as_str().map(|s| s.to_string()),
             rating,
@@ -236,37 +240,52 @@ impl Twitter {
     }
 
     pub async fn load_tweet(&self, id: &str) -> eyre::Result<SubmissionResult> {
-        let params = [
-            "cards_platform=Web-12",
-            "include_cards=1",
-            "include_ext_alt_text=true",
-            "include_quote_count=true",
-            "include_reply_count=1",
-            "tweet_mode=extended",
-            "include_ext_media_color=true",
-            "include_ext_media_availability=true",
-            "include_ext_sensitive_media_warning=true",
-            "simple_quoted_tweet=true",
-        ]
-        .into_iter()
-        .collect::<Vec<_>>()
-        .join("&");
+        let features = serde_json::to_string(&serde_json::json!({
+            "creator_subscriptions_tweet_preview_api_enabled": true,
+            "tweetypie_unmention_optimization_enabled": true,
+            "responsive_web_edit_tweet_api_enabled": true,
+            "graphql_is_translatable_rweb_tweet_is_translatable_enabled": true,
+            "view_counts_everywhere_api_enabled": true,
+            "longform_notetweets_consumption_enabled": true,
+            "responsive_web_twitter_article_tweet_consumption_enabled": false,
+            "tweet_awards_web_tipping_enabled": false,
+            "freedom_of_speech_not_reach_fetch_enabled": true,
+            "standardized_nudges_misinfo": true,
+            "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": true,
+            "longform_notetweets_rich_text_read_enabled": true,
+            "longform_notetweets_inline_media_enabled": true,
+            "responsive_web_graphql_exclude_directive_enabled": true,
+            "verified_phone_label_enabled": false,
+            "responsive_web_media_download_video_enabled": false,
+            "responsive_web_graphql_skip_user_profile_image_extensions_enabled": false,
+            "responsive_web_graphql_timeline_navigation_enabled": true,
+            "responsive_web_enhance_cards_enabled": false
+        }))?;
 
-        let conversation = self
-            .fetch(&format!(
-                "https://twitter.com/i/api/2/timeline/conversation/{id}.json?{params}"
-            ))
-            .await?;
+        let variables = serde_json::to_string(&serde_json::json!({
+            "tweetId": id,
+            "withCommunity": false,
+            "includePromotedContent": false,
+            "withVoice": false,
+        }))?;
 
-        let tweet = conversation["globalObjects"]["tweets"]
-            .get(id)
+        let url = reqwest::Url::parse_with_params(
+            "https://twitter.com/i/api/graphql/3HC_X_wzxnMmUBRIn3MWpQ/TweetResultByRestId",
+            &[("variables", &variables), ("features", &features)],
+        )?;
+
+        let conversation = self.fetch(url.as_str()).await?;
+        tracing::trace!("got conversation: {conversation:?}");
+
+        let tweet = conversation["data"]["tweetResult"]["result"]
+            .get("legacy")
             .context("missing tweet object")?;
 
         let user_id = tweet["user_id_str"]
             .as_str()
             .context("missing user id str")?;
-        let user = conversation["globalObjects"]["users"]
-            .get(user_id)
+        let user = conversation["data"]["tweetResult"]["result"]["core"]["user_results"]["result"]
+            .get("legacy")
             .context("missing user object")?;
 
         let result = self.process_tweet(id, user_id, user, tweet).await?;
