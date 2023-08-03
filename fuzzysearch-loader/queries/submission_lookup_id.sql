@@ -4,7 +4,7 @@ WITH search_query AS (
         query.submission_id
     FROM jsonb_to_recordset($1)
         AS query (site_name TEXT, submission_id TEXT)
-    JOIN submissions.site ON site.name = query.site_name
+    JOIN site ON site.name = query.site_name
 )
 SELECT
 	DISTINCT ON (submission.site_id, submission.site_submission_id, submission_media.site_media_id)
@@ -21,8 +21,8 @@ SELECT
 	(
 		SELECT
 			jsonb_agg(jsonb_build_object('name', artist.display_name, 'link', artist.link))
-		FROM submissions.submission_artist
-			JOIN submissions.artist ON artist.id = submission_artist.artist_id
+		FROM submission_artist
+			JOIN artist ON artist.id = submission_artist.artist_id
 		WHERE submission_artist.submission_id = submission.id
 	) artists,
 	submission.rating,
@@ -37,11 +37,11 @@ SELECT
 	media.mime_type,
 	media_frame.frame_index "frame_index?"
 FROM search_query
-    JOIN submissions.submission ON submission.site_id = search_query.site_id AND submission.site_submission_id = search_query.submission_id
-	JOIN submissions.site ON site.id = submission.site_id
-	LEFT JOIN submissions.submission_media ON submission_media.submission_id = submission.id
-	LEFT JOIN submissions.media ON media.id = submission_media.media_id
-	LEFT JOIN submissions.media_frame ON media_frame.media_id = media.id
+    JOIN submission ON submission.site_id = search_query.site_id AND submission.site_submission_id = search_query.submission_id
+	JOIN site ON site.id = submission.site_id
+	LEFT JOIN submission_media ON submission_media.submission_id = submission.id
+	LEFT JOIN media ON media.id = submission_media.media_id
+	LEFT JOIN media_frame ON media_frame.media_id = media.id
 ORDER BY
 	submission.site_id,
 	submission.site_submission_id,

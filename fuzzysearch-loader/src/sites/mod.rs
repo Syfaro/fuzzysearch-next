@@ -15,16 +15,16 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
 use tap::{TapFallible, TapOptional};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 use crate::{
-    sites::{e621::E621, furaffinity::FurAffinity, twitter::Twitter, weasyl::Weasyl},
+    sites::{e621::E621, furaffinity::FurAffinity, weasyl::Weasyl},
     Config,
 };
 
 mod e621;
 mod furaffinity;
-mod twitter;
 mod weasyl;
 
 lazy_static! {
@@ -68,7 +68,15 @@ pub trait LoadableSite {
     ///
     /// Only return errors for system failures, use an errored submission result
     /// if a submission can't be loaded.
-    async fn load(&self, ids: Vec<&str>) -> eyre::Result<Vec<SubmissionResult>>;
+    async fn load_multiple(&self, ids: Vec<&str>) -> eyre::Result<Vec<SubmissionResult>> {
+        futures::stream::iter(ids)
+            .then(|id| self.load(id))
+            .try_collect()
+            .await
+    }
+
+    /// Load a single submission.
+    async fn load(&self, id: &str) -> eyre::Result<SubmissionResult>;
 }
 
 /// Get all of the sites.
@@ -117,13 +125,6 @@ pub async fn sites(config: &Config, client: reqwest::Client, pool: PgPool) -> Ve
         sites.push(Box::new(e621));
     }
 
-    tracing::info!("adding twitter");
-    sites.push(Box::new(Twitter::new(
-        client,
-        config.download_path.clone(),
-        pool.clone(),
-    )));
-
     sites
 }
 
@@ -166,7 +167,7 @@ impl LoadSubmissions for &[BoxSite] {
                     .tap_some(|site| tracing::trace!(site = %site.site(), "matched site"))
                     .map(|loadable_site| (loadable_site, ids))
             })
-            .map(|(loadable_site, ids)| loadable_site.load(ids))
+            .map(|(loadable_site, ids)| loadable_site.load_multiple(ids))
             .collect();
 
         let submissions: Vec<Vec<SubmissionResult>> = site_loads.try_collect().await?;

@@ -10,7 +10,7 @@ use std::{
 use async_trait::async_trait;
 use chrono::TimeZone;
 use eyre::ContextCompat;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use fuzzysearch_common::{Artist, Rating, Site};
 use lazy_static::lazy_static;
 use prometheus::{register_int_gauge, register_int_gauge_vec, IntGauge, IntGaugeVec, Opts};
@@ -139,15 +139,14 @@ impl FurAffinity {
     ) -> Arc<Self> {
         let cookies = format!("a={cookie_a}; b={cookie_b}");
 
-        let known_ids: HashSet<i32> = sqlx::query_scalar!(
-            "SELECT site_submission_id FROM submissions.submission WHERE site_id = 1"
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("could not get existing submissions")
-        .into_iter()
-        .flat_map(|id| id.parse().ok())
-        .collect();
+        let known_ids: HashSet<i32> =
+            sqlx::query_scalar!("SELECT site_submission_id FROM submission WHERE site_id = 1")
+                .fetch_all(&pool)
+                .await
+                .expect("could not get existing submissions")
+                .into_iter()
+                .flat_map(|id| id.parse().ok())
+                .collect();
         tracing::info!(len = known_ids.len(), "discovered known ids");
 
         let max_id = known_ids.iter().max().copied().unwrap_or(1);
@@ -424,7 +423,7 @@ impl FurAffinity {
         let latest_known_id = self.latest_id.load(Ordering::Relaxed) as i64;
 
         let latest_loaded_id = sqlx::query_scalar!(
-            "SELECT max(site_submission_id::bigint) FROM submissions.submission WHERE site_id = 1"
+            "SELECT max(site_submission_id::bigint) FROM submission WHERE site_id = 1"
         )
         .fetch_one(&self.pool)
         .await?
@@ -520,13 +519,8 @@ impl LoadableSite for FurAffinity {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn load(&self, ids: Vec<&str>) -> eyre::Result<Vec<SubmissionResult>> {
-        tracing::info!("starting to load submissions");
-
-        futures::stream::iter(ids)
-            .then(|id| self.load_submission(id))
-            .try_collect()
-            .await
+    async fn load(&self, id: &str) -> eyre::Result<SubmissionResult> {
+        self.load_submission(id).await
     }
 }
 

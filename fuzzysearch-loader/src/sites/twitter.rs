@@ -327,7 +327,7 @@ impl Twitter {
         }))?;
 
         let mut latest_id = sqlx::query_scalar!(
-            "SELECT latest_id FROM metadata.twitter_user WHERE twitter_id = $1",
+            "SELECT latest_id FROM twitter_user WHERE twitter_id = $1",
             user_id.parse::<i64>().unwrap()
         )
         .fetch_optional(&self.pool)
@@ -456,7 +456,7 @@ impl Twitter {
         tracing::debug!(found_tweets, "completed fetch");
 
         if let Some(latest_id) = latest_id {
-            sqlx::query!("UPDATE metadata.twitter_user SET latest_id = $2, updated_at = current_timestamp WHERE twitter_id = $1", user_id.parse::<i64>().unwrap(), latest_id).execute(&mut tx).await?;
+            sqlx::query!("UPDATE twitter_user SET latest_id = $2, updated_at = current_timestamp WHERE twitter_id = $1", user_id.parse::<i64>().unwrap(), latest_id).execute(&mut tx).await?;
         }
 
         tx.commit().await?;
@@ -492,7 +492,7 @@ impl Twitter {
             .as_str()
             .context("missing rest id")?;
 
-        sqlx::query!("INSERT INTO metadata.twitter_user (twitter_id, data) VALUES ($1, $2) ON CONFLICT (twitter_id) DO UPDATE SET data = EXCLUDED.data", id.parse::<i64>().unwrap(), user["data"]["user"]["result"]).execute(&self.pool).await?;
+        sqlx::query!("INSERT INTO twitter_user (twitter_id, data) VALUES ($1, $2) ON CONFLICT (twitter_id) DO UPDATE SET data = EXCLUDED.data", id.parse::<i64>().unwrap(), user["data"]["user"]["result"]).execute(&self.pool).await?;
 
         Ok(id.to_string())
     }
@@ -505,7 +505,7 @@ impl LoadableSite for Twitter {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn load(&self, ids: Vec<&str>) -> eyre::Result<Vec<SubmissionResult>> {
+    async fn load_multiple(&self, ids: Vec<&str>) -> eyre::Result<Vec<SubmissionResult>> {
         tracing::info!("starting to load submissions");
 
         futures::stream::iter(ids)

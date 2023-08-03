@@ -1,7 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
-use futures::{StreamExt, TryStreamExt};
 use fuzzysearch_common::{Artist, Rating, Site, Submission};
 use serde::Deserialize;
 
@@ -164,13 +163,8 @@ impl LoadableSite for E621 {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn load(&self, ids: Vec<&str>) -> eyre::Result<Vec<SubmissionResult>> {
-        tracing::info!("starting to load submissions");
-
-        futures::stream::iter(ids)
-            .then(|id| self.load_submission(id))
-            .try_collect()
-            .await
+    async fn load(&self, id: &str) -> eyre::Result<SubmissionResult> {
+        self.load_submission(id).await
     }
 }
 
