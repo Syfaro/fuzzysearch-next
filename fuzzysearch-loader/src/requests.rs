@@ -8,12 +8,21 @@ use fuzzysearch_common::{
     FetchPolicy, FetchRequest, FetchResponse, FetchStatus, FetchedSubmission, Site, Submission,
     SubmissionQuery,
 };
+use serde::Serialize;
 use sqlx::PgPool;
 use tap::TapFallible;
 
 use crate::sites::{BoxSite, LoadSubmissions, SubmissionResult};
 
-async fn load_submissions(
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FetchReason {
+    #[serde(rename = "demand")]
+    OnDemand,
+    Live,
+}
+
+async fn fetch_existing_submissions(
     pool: &PgPool,
     ids: &[(Site, String)],
 ) -> Result<HashMap<(Site, String), Submission>, async_nats::service::error::Error> {
@@ -50,6 +59,7 @@ async fn load_submissions(
 #[tracing::instrument(skip_all)]
 pub async fn handle_fetch(
     pool: PgPool,
+    nats: async_nats::Client,
     sites: Arc<Vec<BoxSite>>,
     message: &Message,
 ) -> Result<Bytes, async_nats::service::error::Error> {
@@ -91,7 +101,7 @@ pub async fn handle_fetch(
     if matches!(req.policy, FetchPolicy::Never | FetchPolicy::Maybe { .. }) {
         tracing::info!("looking for cached values");
 
-        let submissions = load_submissions(&pool, &submission_ids).await?;
+        let submissions = fetch_existing_submissions(&pool, &submission_ids).await?;
         tracing::debug!(len = submissions.len(), "found cached submissions");
 
         ready_submissions.extend(
@@ -193,7 +203,7 @@ pub async fn handle_fetch(
     {
         tracing::warn!("still needed submissions and permits stale, loading");
 
-        let submissions = load_submissions(&pool, &needing_load).await?;
+        let submissions = fetch_existing_submissions(&pool, &needing_load).await?;
         tracing::info!(len = submissions.len(), "found cached submissions");
 
         ready_submissions.extend(submissions.into_iter().map(|(key, submission)| {
@@ -207,13 +217,16 @@ pub async fn handle_fetch(
         }));
     }
 
-    for (key, sub) in &ready_submissions {
+    for (key, sub) in ready_submissions.iter_mut() {
         match sub {
             FetchedSubmission::Success {
                 fetch_status: FetchStatus::Fetched,
                 submission,
             } => {
-                if let Err(err) = crate::sites::insert_submission(&pool, submission).await {
+                if let Err(err) =
+                    crate::sites::insert_submission(&pool, &nats, FetchReason::OnDemand, submission)
+                        .await
+                {
                     tracing::error!(?key, "could not insert submission: {err}");
                 }
             }

@@ -19,6 +19,7 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 use crate::{
+    requests::FetchReason,
     sites::{e621::E621, furaffinity::FurAffinity, weasyl::Weasyl},
     Config,
 };
@@ -80,8 +81,13 @@ pub trait LoadableSite {
 }
 
 /// Get all of the sites.
-pub async fn sites(config: &Config, client: reqwest::Client, pool: PgPool) -> Vec<BoxSite> {
-    let mut sites: Vec<BoxSite> = Vec::with_capacity(4);
+pub async fn sites(
+    config: &Config,
+    client: reqwest::Client,
+    pool: PgPool,
+    nats: async_nats::Client,
+) -> Vec<BoxSite> {
+    let mut sites: Vec<BoxSite> = Vec::with_capacity(3);
 
     if let (Some(cookie_a), Some(cookie_b)) = (
         config.furaffinity_cookie_a.as_ref(),
@@ -95,6 +101,7 @@ pub async fn sites(config: &Config, client: reqwest::Client, pool: PgPool) -> Ve
             config.furaffinity_bot_threshold,
             client.clone(),
             pool.clone(),
+            nats,
         )
         .await;
         sites.push(Box::new(fa))
@@ -518,7 +525,12 @@ async fn link_submission_media(
     Ok(())
 }
 
-pub async fn insert_submission(conn: &PgPool, submission: &Submission) -> eyre::Result<Uuid> {
+pub async fn insert_submission(
+    conn: &PgPool,
+    nats: &async_nats::Client,
+    reason: FetchReason,
+    submission: &mut Submission,
+) -> eyre::Result<Uuid> {
     let mut tx = conn.begin().await?;
 
     let futs = submission.artists.iter().map(|artist| {
@@ -577,6 +589,12 @@ pub async fn insert_submission(conn: &PgPool, submission: &Submission) -> eyre::
     }
 
     tx.commit().await?;
+
+    submission.id = Some(submission_id);
+
+    if let Err(err) = notify_submission(nats, reason, submission).await {
+        tracing::error!("could not notify for submission: {err}");
+    }
 
     Ok(submission_id)
 }
@@ -656,6 +674,7 @@ pub fn collapse_db_submissions(
         submissions
             .entry((site, db_submission.site_submission_id.clone()))
             .or_insert_with(|| Submission {
+                id: Some(db_submission.id),
                 site,
                 submission_id: db_submission.site_submission_id,
                 deleted: db_submission.deleted.unwrap_or_default(),
@@ -681,4 +700,38 @@ pub fn collapse_db_submissions(
     tracing::info!(len = submissions.len(), "found unique submissions");
 
     Ok(submissions)
+}
+
+trait Slug<'a> {
+    fn slug(&self) -> std::borrow::Cow<'a, str>;
+}
+
+impl Slug<'_> for fuzzysearch_common::Site {
+    fn slug(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::E621 => "e621",
+            Self::FurAffinity => "furaffinity",
+            Self::Twitter => "twitter",
+            Self::Weasyl => "weasyl",
+        }
+        .into()
+    }
+}
+
+async fn notify_submission(
+    nats: &async_nats::Client,
+    reason: FetchReason,
+    submission: &Submission,
+) -> eyre::Result<()> {
+    let subject = format!(
+        "fuzzysearch.loader.submission.{}.{}",
+        serde_plain::to_string(&reason)?,
+        submission.site.slug(),
+    );
+
+    let data = serde_json::to_vec(submission)?;
+
+    nats.publish(subject, data.into()).await?;
+
+    Ok(())
 }

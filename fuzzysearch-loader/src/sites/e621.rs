@@ -57,10 +57,7 @@ impl E621 {
             }
         };
 
-        let text = resp.text().await?;
-        tracing::info!("text: {text}");
-
-        let json: serde_json::Value = match serde_json::from_str(&text) {
+        let json: serde_json::Value = match resp.json().await {
             Ok(resp) => resp,
             Err(err) => {
                 return Ok(SubmissionResult::Error {
@@ -77,6 +74,7 @@ impl E621 {
             Ok(E621Resp { post: Some(post) }) => post,
             Ok(_resp) => {
                 return Ok(SubmissionResult::Fetched(Submission {
+                    id: None,
                     site: self.site(),
                     submission_id: id.to_string(),
                     deleted: true,
@@ -102,6 +100,7 @@ impl E621 {
         };
 
         let mut submission = Submission {
+            id: None,
             site: self.site(),
             submission_id: id.to_string(),
             deleted: false,

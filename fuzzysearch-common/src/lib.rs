@@ -219,6 +219,9 @@ pub struct Artist {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
 pub struct Submission {
+    /// An ID uniquely identifying this submission revision within FuzzySearch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<uuid::Uuid>,
     /// The site where a submission resides.
     pub site: Site,
     /// The ID of the submission, as given by the site.

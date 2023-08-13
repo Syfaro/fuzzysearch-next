@@ -89,7 +89,7 @@ async fn main() -> eyre::Result<()> {
     }
     let client = client_builder.build()?;
 
-    let sites = Arc::new(sites::sites(&config, client, pool.clone()).await);
+    let sites = Arc::new(sites::sites(&config, client, pool.clone(), nats.clone()).await);
 
     let service = nats
         .service_builder()
@@ -106,12 +106,13 @@ async fn main() -> eyre::Result<()> {
 
     while let Some(request) = requests.next().await {
         let pool = pool.clone();
+        let nats = nats.clone();
         let sites = sites.clone();
 
         tokio::spawn(async move {
             match request.message.subject.as_ref() {
                 "fuzzysearch.loader.fetch" => {
-                    let resp = requests::handle_fetch(pool, sites, &request.message).await;
+                    let resp = requests::handle_fetch(pool, nats, sites, &request.message).await;
 
                     if let Err(err) = request.respond(resp).await {
                         tracing::error!("could not reply to service request: {err}");

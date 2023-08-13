@@ -27,7 +27,7 @@ SELECT
 	) artists,
 	submission.rating,
 	submission.posted_at,
-	submission.tags,
+	submission.tags::text[],
 	(submission.deleted OR submission_media.deleted) deleted,
 	submission.retrieved_at,
 	submission.extra,

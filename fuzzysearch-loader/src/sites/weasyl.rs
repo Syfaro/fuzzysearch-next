@@ -80,6 +80,7 @@ impl Weasyl {
             WeasylResponse::Success(sub) => sub,
             WeasylResponse::Error { error } if error.name == "submissionRecordMissing" => {
                 return Ok(SubmissionResult::Fetched(Submission {
+                    id: None,
                     site: self.site(),
                     submission_id: id.to_string(),
                     deleted: true,
@@ -137,6 +138,7 @@ impl Weasyl {
         }
 
         let submission = Submission {
+            id: None,
             site: self.site(),
             submission_id: id.to_string(),
             deleted: false,
