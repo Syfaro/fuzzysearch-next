@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use fuzzysearch_common::{Artist, Rating, Site, Submission};
@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::{
     sites::{process_file, LoadableSite, SubmissionResult},
-    SiteConfig,
+    SiteContext,
 };
 
 const INVALID_ARTISTS: &[&str] = &[
@@ -17,30 +17,21 @@ const INVALID_ARTISTS: &[&str] = &[
 ];
 
 pub struct E621 {
-    download_path: Option<PathBuf>,
-    client: reqwest::Client,
-    pool: sqlx::PgPool,
+    ctx: Arc<SiteContext>,
     authorization: (String, String),
 }
 
 impl E621 {
-    pub fn new(
-        site_config: SiteConfig,
-        login: String,
-        api_token: String,
-        client: reqwest::Client,
-        pool: sqlx::PgPool,
-    ) -> Arc<Self> {
+    pub fn new(ctx: Arc<SiteContext>, login: String, api_token: String) -> Arc<Self> {
         Arc::new(Self {
-            download_path: site_config.download_path,
-            client,
-            pool,
+            ctx,
             authorization: (login, api_token),
         })
     }
 
     async fn load_submission(&self, id: &str) -> eyre::Result<SubmissionResult> {
         let resp = match self
+            .ctx
             .client
             .get(format!("https://e621.net/posts/{id}.json"))
             .basic_auth(&self.authorization.0, Some(&self.authorization.1))
@@ -129,15 +120,7 @@ impl E621 {
         };
 
         if let Some(file_url) = post.file.url {
-            let media = match process_file(
-                &self.pool,
-                &self.download_path,
-                &self.client,
-                None,
-                &file_url,
-            )
-            .await
-            {
+            let media = match process_file(&self.ctx, None, &file_url).await {
                 Ok(media) => media,
                 Err(err) => {
                     return Ok(SubmissionResult::Error {

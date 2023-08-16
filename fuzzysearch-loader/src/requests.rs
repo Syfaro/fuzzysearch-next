@@ -93,13 +93,20 @@ pub async fn handle_fetch(
         }
     };
 
+    if submission_ids.len() > 100 {
+        return Err(async_nats::service::error::Error {
+            status: format!("request had too many submissions"),
+            code: 418,
+        });
+    }
+
     let mut ready_submissions: HashMap<(Site, String), FetchedSubmission> =
         HashMap::with_capacity(submission_ids.len());
 
-    tracing::info!("request policy: {:?}", req.policy);
+    tracing::debug!("request policy: {:?}", req.policy);
 
     if matches!(req.policy, FetchPolicy::Never | FetchPolicy::Maybe { .. }) {
-        tracing::info!("looking for cached values");
+        tracing::debug!("looking for cached values");
 
         let submissions = fetch_existing_submissions(&pool, &submission_ids).await?;
         tracing::debug!(len = submissions.len(), "found cached submissions");

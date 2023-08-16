@@ -1,9 +1,11 @@
 SELECT
     media.id,
-    media_frame.perceptual_gradient
+    array_agg(media_frame.perceptual_gradient ORDER BY media_frame.frame_index) perceptual_gradients
 FROM
     media
-    LEFT JOIN media_frame ON media_frame.media_id = media.id AND media_frame.frame_index = 0
+    JOIN media_frame ON media_frame.media_id = media.id
 WHERE
     file_sha256 IS NOT NULL
-    AND file_sha256 = $1;
+    AND file_sha256 = $1
+GROUP BY
+    1;

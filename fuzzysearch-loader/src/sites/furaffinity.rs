@@ -1,6 +1,5 @@
 use std::{
     collections::HashSet,
-    path::PathBuf,
     sync::{
         atomic::{AtomicI32, Ordering},
         Arc,
@@ -26,7 +25,7 @@ use tracing::Instrument;
 use crate::{
     requests::FetchReason,
     sites::{process_file, LoadableSite, Submission, SubmissionResult},
-    SiteConfig,
+    SiteContext,
 };
 
 lazy_static! {
@@ -107,13 +106,9 @@ impl FurAffinityRating {
 }
 
 pub struct FurAffinity {
-    pool: PgPool,
-    nats: async_nats::Client,
-    client: reqwest::Client,
+    ctx: Arc<SiteContext>,
 
     cookies: String,
-    download_path: Option<PathBuf>,
-    bot_threshold: u64,
 
     leader: RwLock<Option<Arc<FurAffinityLeader>>>,
 }
@@ -127,28 +122,17 @@ struct OnlineCounts {
 }
 
 impl FurAffinity {
-    pub async fn new(
-        site_config: SiteConfig,
-        cookie_a: String,
-        cookie_b: String,
-        bot_threshold: u64,
-        client: reqwest::Client,
-        pool: PgPool,
-        nats: async_nats::Client,
-    ) -> Arc<Self> {
+    pub async fn new(ctx: Arc<SiteContext>, cookie_a: String, cookie_b: String) -> Arc<Self> {
         let cookies = format!("a={cookie_a}; b={cookie_b}");
+        let auto_fetch = ctx.config.auto_fetch_submissions;
 
         let fa = Arc::new(Self {
-            pool,
-            nats,
-            client,
+            ctx,
             cookies,
-            download_path: site_config.download_path,
-            bot_threshold,
             leader: Default::default(),
         });
 
-        if site_config.auto_fetch_submissions {
+        if auto_fetch {
             let fa = fa.clone();
 
             tokio::spawn(async move {
@@ -163,6 +147,7 @@ impl FurAffinity {
 
     async fn refresh_metadata(&self, tx: &tokio::sync::watch::Sender<bool>) -> eyre::Result<i32> {
         let page = self
+            .ctx
             .client
             .get("https://www.furaffinity.net/")
             .header("cookie", &self.cookies)
@@ -212,7 +197,7 @@ impl FurAffinity {
             .with_label_values(&["other"])
             .set(online.other as i64);
 
-        let below_threshold = online.registered < self.bot_threshold;
+        let below_threshold = online.registered < self.ctx.config.furaffinity_bot_threshold;
         tx.send_if_modified(|state: &mut bool| {
             if below_threshold != *state {
                 *state = below_threshold;
@@ -241,6 +226,7 @@ impl FurAffinity {
         let url = format!("https://www.furaffinity.net/view/{id}/");
 
         let page = match self
+            .ctx
             .client
             .get(&url)
             .header("cookie", &self.cookies)
@@ -282,15 +268,7 @@ impl FurAffinity {
         let (mut submission, content_url_parts) = parse_submission(id.to_string(), url, &content)?;
 
         if let Some(content_url_parts) = content_url_parts {
-            let mut media = match process_file(
-                &self.pool,
-                &self.download_path,
-                &self.client,
-                None,
-                &content_url_parts.url,
-            )
-            .await
-            {
+            let mut media = match process_file(&self.ctx, None, &content_url_parts.url).await {
                 Ok(media) => media,
                 Err(err) => {
                     return Ok(SubmissionResult::Error {
@@ -330,8 +308,8 @@ impl FurAffinity {
         match self.load_submission(&id).await? {
             SubmissionResult::Fetched(mut sub) => {
                 crate::sites::insert_submission(
-                    &self.pool,
-                    &self.nats,
+                    &self.ctx.pool,
+                    &self.ctx.nats,
                     FetchReason::Live,
                     &mut sub,
                 )
@@ -545,7 +523,7 @@ impl FurAffinityLeader {
         let known_ids: HashSet<i32> = sqlx::query_scalar!(
             "SELECT site_submission_id::integer FROM submission WHERE site_id = 1"
         )
-        .fetch_all(&fa.pool)
+        .fetch_all(&fa.ctx.pool)
         .await
         .expect("could not get existing submissions")
         .into_iter()
@@ -553,7 +531,7 @@ impl FurAffinityLeader {
         .collect();
         tracing::info!(len = known_ids.len(), "discovered known ids");
 
-        let max_id = Self::latest_loaded_id(&fa.pool)
+        let max_id = Self::latest_loaded_id(&fa.ctx.pool)
             .await
             .expect("could not get max_id")
             .max(1);
@@ -565,7 +543,7 @@ impl FurAffinityLeader {
         let latest_id = AtomicI32::new(0);
         let (tx, below_bot_threshold) = tokio::sync::watch::channel(false);
 
-        let token = CancellationToken::new();
+        let token = fa.ctx.token.child_token();
 
         let leader = Arc::new(Self {
             latest_id,
@@ -630,7 +608,19 @@ impl FurAffinityLeader {
                             tracing::debug!("refreshing metadata");
                             match leader.fa.refresh_metadata(&tx).await {
                                 Ok(latest_id) => leader.latest_id.store(latest_id, Ordering::Relaxed),
-                                Err(err) => tracing::error!("could not refresh metadata: {err}"),
+                                Err(err) => {
+                                    tracing::error!("could not refresh metadata: {err}");
+
+                                    tx.send_if_modified(|below_threshold| {
+                                        if !*below_threshold {
+                                            return false;
+                                        }
+
+                                        tracing::info!("marking as not below threshold");
+                                        *below_threshold = false;
+                                        true
+                                    });
+                                }
                             }
                         }
                     }
@@ -642,7 +632,7 @@ impl FurAffinityLeader {
 
     async fn load_new_submissions(&self) -> eyre::Result<()> {
         let latest_known_id = self.latest_id.load(Ordering::Relaxed);
-        let latest_loaded_id = Self::latest_loaded_id(&self.fa.pool).await?;
+        let latest_loaded_id = Self::latest_loaded_id(&self.fa.ctx.pool).await?;
 
         tracing::info!(latest_known_id, latest_loaded_id, "found latest ids");
 
@@ -666,6 +656,7 @@ impl FurAffinityLeader {
 
             let mut sub = match self
                 .fa
+                .ctx
                 .nats
                 .subscribe("fuzzysearch.loader.submission.*.furaffinity".to_string())
                 .await
@@ -801,7 +792,7 @@ impl FurAffinityLeader {
                         "SELECT 1 one FROM submission WHERE site_id = 1 AND site_submission_id = $1",
                         missing_id.to_string()
                     )
-                    .fetch_optional(&leader.fa.pool)
+                    .fetch_optional(&leader.fa.ctx.pool)
                     .await
                     .ok()
                     .flatten()

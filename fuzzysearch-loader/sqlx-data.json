@@ -37,32 +37,6 @@
     },
     "query": "INSERT INTO submission_artist (submission_id, artist_id)\n    SELECT * FROM jsonb_to_recordset($1)\n        AS submission_artist (submission_id uuid, artist_id uuid)\n    ON CONFLICT DO NOTHING;\n"
   },
-  "5c66b318c83f64c01fbd4402199b5253d52c1880fbd460581756210f5993daba": {
-    "describe": {
-      "columns": [
-        {
-          "name": "id",
-          "ordinal": 0,
-          "type_info": "Uuid"
-        },
-        {
-          "name": "perceptual_gradient",
-          "ordinal": 1,
-          "type_info": "Int8"
-        }
-      ],
-      "nullable": [
-        false,
-        true
-      ],
-      "parameters": {
-        "Left": [
-          "Bytea"
-        ]
-      }
-    },
-    "query": "SELECT\n    media.id,\n    media_frame.perceptual_gradient\nFROM\n    media\n    LEFT JOIN media_frame ON media_frame.media_id = media.id AND media_frame.frame_index = 0\nWHERE\n    file_sha256 IS NOT NULL\n    AND file_sha256 = $1;\n"
-  },
   "6168a7003390dc607621a001d5c0e336c167f1a931bdaadb7ab56845f9cc1a74": {
     "describe": {
       "columns": [
@@ -352,6 +326,32 @@
       }
     },
     "query": "SELECT\n    id\nFROM\n    media\nWHERE\n    file_sha256 IS NOT NULL\n    AND file_sha256 = $1;\n"
+  },
+  "d0f210d1e87912aae656e30a566ed07efc2448350a68bcd4edd15b16ad36d9a0": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        },
+        {
+          "name": "perceptual_gradients",
+          "ordinal": 1,
+          "type_info": "Int8Array"
+        }
+      ],
+      "nullable": [
+        false,
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Bytea"
+        ]
+      }
+    },
+    "query": "SELECT\n    media.id,\n    array_agg(media_frame.perceptual_gradient ORDER BY media_frame.frame_index) perceptual_gradients\nFROM\n    media\n    JOIN media_frame ON media_frame.media_id = media.id\nWHERE\n    file_sha256 IS NOT NULL\n    AND file_sha256 = $1\nGROUP BY\n    1;\n"
   },
   "e95829d7915def1812646a2dff11bbd0014b3c9c291dacfdb80627bf972eeb48": {
     "describe": {

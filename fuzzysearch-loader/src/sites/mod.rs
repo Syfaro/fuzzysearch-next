@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Seek, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, io::Seek, sync::Arc};
 
 use async_trait::async_trait;
 use eyre::eyre;
@@ -6,6 +6,7 @@ use foxlib::hash::image::AnimationDecoder;
 use futures::{stream::FuturesUnordered, TryStreamExt};
 use fuzzysearch_common::{Media, MediaFrame, Site, Submission};
 use lazy_static::lazy_static;
+use object_store::path::Path;
 use prometheus::{
     register_histogram_vec, register_int_counter_vec, HistogramOpts, HistogramVec, IntCounterVec,
     Opts,
@@ -21,7 +22,7 @@ use uuid::Uuid;
 use crate::{
     requests::FetchReason,
     sites::{e621::E621, furaffinity::FurAffinity, weasyl::Weasyl},
-    Config,
+    SiteContext,
 };
 
 mod e621;
@@ -81,54 +82,30 @@ pub trait LoadableSite {
 }
 
 /// Get all of the sites.
-pub async fn sites(
-    config: &Config,
-    client: reqwest::Client,
-    pool: PgPool,
-    nats: async_nats::Client,
-) -> Vec<BoxSite> {
+pub async fn sites(ctx: Arc<SiteContext>) -> Vec<BoxSite> {
     let mut sites: Vec<BoxSite> = Vec::with_capacity(3);
 
     if let (Some(cookie_a), Some(cookie_b)) = (
-        config.furaffinity_cookie_a.as_ref(),
-        config.furaffinity_cookie_b.as_ref(),
+        ctx.config.furaffinity_cookie_a.as_ref(),
+        ctx.config.furaffinity_cookie_b.as_ref(),
     ) {
         tracing::info!("adding furaffinity");
-        let fa = FurAffinity::new(
-            config.site(),
-            cookie_a.clone(),
-            cookie_b.clone(),
-            config.furaffinity_bot_threshold,
-            client.clone(),
-            pool.clone(),
-            nats,
-        )
-        .await;
+        let fa = FurAffinity::new(ctx.clone(), cookie_a.clone(), cookie_b.clone()).await;
         sites.push(Box::new(fa))
     }
 
-    if let Some(weasyl_api_token) = config.weasyl_api_token.as_ref() {
+    if let Some(weasyl_api_token) = ctx.config.weasyl_api_token.as_ref() {
         tracing::info!("adding weasyl");
-        let weasyl = Weasyl::new(
-            config.site(),
-            weasyl_api_token.clone(),
-            client.clone(),
-            pool.clone(),
-        );
+        let weasyl = Weasyl::new(ctx.clone(), weasyl_api_token.clone());
         sites.push(Box::new(weasyl));
     }
 
-    if let (Some(e621_login), Some(e621_api_token)) =
-        (config.e621_login.as_ref(), config.e621_api_token.as_ref())
-    {
+    if let (Some(e621_login), Some(e621_api_token)) = (
+        ctx.config.e621_login.as_ref(),
+        ctx.config.e621_api_token.as_ref(),
+    ) {
         tracing::info!("adding e621");
-        let e621 = E621::new(
-            config.site(),
-            e621_login.clone(),
-            e621_api_token.clone(),
-            client.clone(),
-            pool.clone(),
-        );
+        let e621 = E621::new(ctx.clone(), e621_login.clone(), e621_api_token.clone());
         sites.push(Box::new(e621));
     }
 
@@ -186,11 +163,9 @@ impl LoadSubmissions for &[BoxSite] {
     }
 }
 
-#[tracing::instrument(skip(pool, download_path, client, site_id))]
+#[tracing::instrument(skip(ctx, site_id))]
 pub async fn process_file(
-    pool: &PgPool,
-    download_path: &Option<PathBuf>,
-    client: &reqwest::Client,
+    ctx: &SiteContext,
     site_id: Option<String>,
     url: &str,
 ) -> eyre::Result<Media> {
@@ -198,7 +173,7 @@ pub async fn process_file(
 
     const MAX_DOWNLOAD_SIZE: usize = 2_000_000_000;
 
-    let mut req = client.get(url).send().await?;
+    let mut req = ctx.client.get(url).send().await?;
 
     let named_file = tempfile::NamedTempFile::new()?;
     let (file, path) = named_file.into_parts();
@@ -239,7 +214,7 @@ pub async fn process_file(
 
     if let Ok(Some(media)) =
         sqlx::query_file!("queries/media_lookup_sha256_full.sql", sha256.to_vec())
-            .fetch_optional(pool)
+            .fetch_optional(&ctx.pool)
             .await
     {
         tracing::info!("already had media for this hash, skipping processing");
@@ -252,37 +227,24 @@ pub async fn process_file(
             file_size: Some(file_size as i64),
             mime_type,
             frames: media
-                .perceptual_gradient
-                .map(|hash| MediaFrame {
-                    frame_index: 0,
-                    perceptual_gradient: Some(hash.to_be_bytes()),
+                .perceptual_gradients
+                .map(|perceptual_gradients| {
+                    perceptual_gradients
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, perceptual_gradient)| MediaFrame {
+                            frame_index: idx as i64,
+                            perceptual_gradient: Some(perceptual_gradient.to_be_bytes()),
+                        })
+                        .collect()
                 })
-                .into_iter()
-                .collect(),
+                .unwrap_or_default(),
             extra: None,
         });
     }
 
-    if let Some(download_path) = download_path {
-        let sha256_hex = hex::encode(sha256);
-        let dir = download_path
-            .join(&sha256_hex[0..2])
-            .join(&sha256_hex[2..4]);
-        if !dir.exists() {
-            let _ = tokio::fs::create_dir_all(&dir).await;
-        }
-        let path = dir.join(sha256_hex);
-        tracing::debug!("writing image to {}", path.to_string_lossy());
-
-        match tokio::fs::File::create(path).await {
-            Ok(mut download) => {
-                file.rewind().await?;
-                if let Err(err) = tokio::io::copy(&mut file, &mut download).await {
-                    tracing::error!("could not write file: {err}");
-                }
-            }
-            Err(err) => tracing::error!("could not create file: {err}"),
-        }
+    if let Err(err) = store_file(ctx, &sha256, &mut file).await {
+        tracing::error!("could not upload file: {err}");
     }
 
     file.rewind().await?;
@@ -360,6 +322,39 @@ pub async fn process_file(
     })
 }
 
+#[tracing::instrument(skip_all, fields(sha256))]
+async fn store_file(
+    ctx: &SiteContext,
+    sha256: &[u8],
+    mut file: &mut tokio::fs::File,
+) -> eyre::Result<()> {
+    let sha256_hex = hex::encode(sha256);
+    tracing::Span::current().record("sha256", &sha256_hex);
+    tracing::info!("storing file");
+
+    let path = Path::from_iter([&sha256_hex[0..2], &sha256_hex[2..4], &sha256_hex]);
+    tracing::trace!("storing file at {path}");
+
+    file.rewind().await?;
+
+    let (_id, mut writer) = ctx.object_store.put_multipart(&path).await?;
+    tokio::io::copy(&mut file, &mut writer).await?;
+    writer.shutdown().await?;
+
+    ctx.nats
+        .publish(
+            "fuzzysearch.loader.store".to_string(),
+            serde_json::json!({
+                "sha256": sha256_hex,
+            })
+            .to_string()
+            .into(),
+        )
+        .await?;
+
+    Ok(())
+}
+
 fn decode_video(path: &tempfile::TempPath) -> eyre::Result<Vec<foxlib::hash::ImageHash>> {
     use ffmpeg_next::{
         codec, decoder,
@@ -435,12 +430,12 @@ async fn insert_media(tx: &mut Transaction<'_, Postgres>, media: &Media) -> eyre
     tracing::debug!("attempting to insert media");
 
     if let Some(sha256) = &media.file_sha256 {
-        tracing::debug!("media had sha256: {}", hex::encode(sha256));
+        tracing::trace!("media had sha256: {}", hex::encode(sha256));
         if let Ok(Some(id)) = sqlx::query_file_scalar!("queries/media_lookup_sha256.sql", sha256)
             .fetch_optional(&mut *tx)
             .await
         {
-            tracing::info!("media was already known as {id}");
+            tracing::debug!("media was already known as {id}");
             return Ok(id);
         }
     } else {
@@ -491,7 +486,7 @@ async fn insert_media(tx: &mut Transaction<'_, Postgres>, media: &Media) -> eyre
     .execute(tx)
     .await?;
 
-    tracing::info!("inserted new media with id {media_id}");
+    tracing::debug!("inserted new media with id {media_id}");
     Ok(media_id)
 }
 
@@ -517,9 +512,9 @@ async fn link_submission_media(
     .await?;
 
     if let Some(submission_media_id) = submission_media_id {
-        tracing::info!("inserted new media link {submission_media_id}");
+        tracing::debug!("inserted new media link {submission_media_id}");
     } else {
-        tracing::info!("media link already existed");
+        tracing::debug!("media link already existed");
     }
 
     Ok(())
@@ -625,10 +620,11 @@ pub struct DbSubmission {
     pub frame_index: Option<i64>,
 }
 
+#[tracing::instrument(skip_all)]
 pub fn collapse_db_submissions(
     db_submissions: Vec<DbSubmission>,
 ) -> eyre::Result<HashMap<(Site, String), Submission>> {
-    tracing::info!(len = db_submissions.len(), "collapsing submissions");
+    tracing::debug!(len = db_submissions.len(), "collapsing submissions");
 
     let mut media_frames: HashMap<Uuid, Vec<MediaFrame>> =
         HashMap::with_capacity(db_submissions.len());
@@ -643,7 +639,7 @@ pub fn collapse_db_submissions(
             });
         }
     }
-    tracing::debug!(len = media_frames.len(), "found frames");
+    tracing::trace!(len = media_frames.len(), "found frames");
 
     let mut media: HashMap<Uuid, Vec<Media>> = HashMap::with_capacity(media_frames.len());
     for sub in &db_submissions {
@@ -661,7 +657,7 @@ pub fn collapse_db_submissions(
             extra: sub.submission_media_extra.clone(),
         });
     }
-    tracing::debug!(len = media.len(), "found media");
+    tracing::trace!(len = media.len(), "found media");
 
     let mut submissions = HashMap::with_capacity(media.len());
     for db_submission in db_submissions {
@@ -697,7 +693,7 @@ pub fn collapse_db_submissions(
                 extra: db_submission.extra,
             });
     }
-    tracing::info!(len = submissions.len(), "found unique submissions");
+    tracing::debug!(len = submissions.len(), "found unique submissions");
 
     Ok(submissions)
 }
@@ -732,6 +728,21 @@ async fn notify_submission(
     let data = serde_json::to_vec(submission)?;
 
     nats.publish(subject, data.into()).await?;
+
+    for media in &submission.media {
+        for frame in &media.frames {
+            if let Some(perceptual_gradient) = frame.perceptual_gradient {
+                nats.publish(
+                    "fuzzysearch.bkapi.add".to_string(),
+                    serde_json::to_vec(&serde_json::json!({
+                        "hash": i64::from_be_bytes(perceptual_gradient),
+                    }))?
+                    .into(),
+                )
+                .await?;
+            }
+        }
+    }
 
     Ok(())
 }

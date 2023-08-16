@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use fuzzysearch_common::{Artist, Rating, Site, Submission};
@@ -6,29 +6,17 @@ use serde::Deserialize;
 
 use crate::{
     sites::{process_file, LoadableSite, SubmissionResult},
-    SiteConfig,
+    SiteContext,
 };
 
 pub struct Weasyl {
     pub api_key: String,
-    download_path: Option<PathBuf>,
-    client: reqwest::Client,
-    pool: sqlx::PgPool,
+    ctx: Arc<SiteContext>,
 }
 
 impl Weasyl {
-    pub fn new(
-        site_config: SiteConfig,
-        api_key: String,
-        client: reqwest::Client,
-        pool: sqlx::PgPool,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            api_key,
-            download_path: site_config.download_path,
-            client,
-            pool,
-        })
+    pub fn new(ctx: Arc<SiteContext>, api_key: String) -> Arc<Self> {
+        Arc::new(Self { ctx, api_key })
     }
 
     #[tracing::instrument(skip(self))]
@@ -38,6 +26,7 @@ impl Weasyl {
         let url = format!("https://www.weasyl.com/api/submissions/{}/view", id);
 
         let resp = match self
+            .ctx
             .client
             .get(url)
             .header("x-weasyl-api-key", &self.api_key)
@@ -116,24 +105,17 @@ impl Weasyl {
         let mut submission_media = Vec::with_capacity(1);
         for media in sub.media.remove("submission").unwrap_or_default() {
             tracing::debug!(id = media.mediaid, "processing media");
-            let image = match process_file(
-                &self.pool,
-                &self.download_path,
-                &self.client,
-                Some(media.mediaid.to_string()),
-                &media.url,
-            )
-            .await
-            {
-                Ok(image) => image,
-                Err(err) => {
-                    return Ok(SubmissionResult::Error {
-                        site: self.site(),
-                        submission_id: id.to_string(),
-                        message: Some(err.to_string()),
-                    })
-                }
-            };
+            let image =
+                match process_file(&self.ctx, Some(media.mediaid.to_string()), &media.url).await {
+                    Ok(image) => image,
+                    Err(err) => {
+                        return Ok(SubmissionResult::Error {
+                            site: self.site(),
+                            submission_id: id.to_string(),
+                            message: Some(err.to_string()),
+                        })
+                    }
+                };
             submission_media.push(image);
         }
 
