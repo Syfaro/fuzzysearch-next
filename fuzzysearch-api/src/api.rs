@@ -1,5 +1,7 @@
+use std::borrow::Cow;
+
 use axum::{
-    extract::{Multipart, Path, Query},
+    extract::{ws, Multipart, Query},
     http::StatusCode,
     response::IntoResponse,
     Extension, Json,
@@ -7,10 +9,11 @@ use axum::{
 use bkapi_client::BKApiClient;
 use bytes::BufMut;
 use eyre::Context;
-use pomsky_macro::pomsky;
-use regex::Regex;
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use utoipa::{
     openapi::security::{ApiKey, ApiKeyValue, SecurityScheme},
     IntoParams, Modify, OpenApi, ToSchema,
@@ -27,12 +30,29 @@ use crate::{db, hash_image, ReportError};
         search_image_by_upload,
         search_image_by_url,
         lookup_submissions,
-        check_handle,
-        lookup_furaffinity_file,
         dump_latest,
     ),
     components(
-        schemas(Service, UrlError, SearchResult, Rating, SiteInfo, Image, ImageError, FurAffinityFile, Site, SubmissionFetchItem, FetchedSubmission, Submission, Media, MediaFrame, FetchStatus, SubmissionFetchForm)
+        schemas(
+            Artist,
+            FetchedSubmission,
+            FetchedSubmissionData,
+            FetchStatus,
+            FurAffinityFile,
+            Image,
+            ImageError,
+            Media,
+            MediaFrame,
+            Rating,
+            SearchResult,
+            Service,
+            Site,
+            SiteInfo,
+            Submission,
+            SubmissionFetchForm,
+            SubmissionFetchItem,
+            UrlError,
+        )
     ),
     modifiers(&ApiTokenAddon),
     tags(
@@ -65,48 +85,6 @@ macro_rules! rate_limit {
 
         headers
     }};
-}
-
-#[derive(Debug, Serialize, Deserialize, IntoParams)]
-pub struct HandlePath {
-    service: Service,
-}
-
-#[derive(Debug, Serialize, Deserialize, IntoParams)]
-pub struct HandleQuery {
-    /// The handle to search for, case-insensitive.
-    handle: String,
-}
-
-/// Check if a handle is being indexed for a given service.
-#[utoipa::path(
-    get,
-    path = "/v1/handle/{service}",
-    responses(
-        (status = 200, description = "Handle looked up successfully", body = bool),
-    ),
-    params(
-        HandlePath,
-        HandleQuery,
-    )
-)]
-#[tracing::instrument(err, skip_all, fields(handle = query.handle))]
-pub async fn check_handle(
-    Extension(pool): Extension<PgPool>,
-    Path(path): Path<HandlePath>,
-    Query(query): Query<HandleQuery>,
-) -> Result<impl IntoResponse, ReportError> {
-    let exists = match path.service {
-        Service::Twitter => {
-            sqlx::query_file_scalar!("queries/check_handle_twitter.sql", query.handle)
-                .fetch_one(&pool)
-                .await?
-        }
-    };
-
-    tracing::debug!(exists, "checked handle");
-
-    Ok((StatusCode::OK, Json(exists.unwrap_or(false))))
 }
 
 #[derive(Debug, Serialize, Deserialize, IntoParams)]
@@ -148,10 +126,16 @@ pub async fn search_image_by_hashes(
         .filter_map(|hash| hash.parse::<i64>().ok())
         .collect();
 
-    let headers = rate_limit!(&pool, api_key, &[("image", hashes.len() as i16)]);
+    let headers = rate_limit!(&pool, api_key, &[("image", hashes.len() as i32)]);
 
-    let found_images =
-        db::lookup_hashes(&bkapi, &nats, &hashes, query.distance.unwrap_or(3), None).await?;
+    let found_images = db::lookup_hashes(
+        &bkapi,
+        &nats,
+        &hashes,
+        query.distance.unwrap_or(3),
+        Some(30),
+    )
+    .await?;
 
     Ok((StatusCode::OK, headers, Json(found_images)).into_response())
 }
@@ -235,13 +219,13 @@ pub async fn search_image_by_upload(
         &pool,
         api_key,
         &[
-            ("hash", hashes.len() as i16),
-            ("image", hashes.len() as i16)
+            ("hash", hashes.len() as i32),
+            ("image", hashes.len() as i32)
         ]
     );
 
     tracing::debug!(count = hashes.len(), "hashed images in request");
-    let found_images = db::lookup_hashes(&bkapi, &nats, &hashes, distance, None).await?;
+    let found_images = db::lookup_hashes(&bkapi, &nats, &hashes, distance, Some(30)).await?;
 
     Ok((StatusCode::OK, headers, Json(found_images)).into_response())
 }
@@ -344,7 +328,7 @@ pub async fn search_image_by_url(
     };
     tracing::trace!(hash, "hashed image at url");
 
-    let found_images = db::lookup_hashes(&bkapi, &nats, &[hash], 3, None).await?;
+    let found_images = db::lookup_hashes(&bkapi, &nats, &[hash], 3, Some(30)).await?;
 
     Ok((StatusCode::OK, headers, Json(found_images)).into_response())
 }
@@ -377,18 +361,26 @@ pub struct SubmissionFetchForm {
 )]
 #[tracing::instrument(err, skip_all)]
 pub async fn lookup_submissions(
+    Extension(pool): Extension<PgPool>,
     Extension(nats): Extension<async_nats::Client>,
+    Extension(api_key): Extension<db::UserApiKey>,
     Json(form): Json<SubmissionFetchForm>,
 ) -> Result<impl IntoResponse, ReportError> {
-    let submission_ids = form
+    let submission_ids: Vec<_> = form
         .submissions
         .into_iter()
         .map(|item| (item.site, item.id))
         .collect();
 
+    let headers = rate_limit!(&pool, api_key, &[("hash", submission_ids.len() as i32)]);
+
     let req = FetchRequest {
         query: SubmissionQuery::SubmissionId { submission_ids },
         policy: if let Some(days) = form.refresh_after_days {
+            if days < 1 {
+                return Err(eyre::eyre!("submissions may only be loaded once per day").into());
+            }
+
             FetchPolicy::Maybe {
                 older_than: chrono::Utc::now() - chrono::Duration::days(days),
                 return_stale: true,
@@ -396,6 +388,7 @@ pub async fn lookup_submissions(
         } else {
             FetchPolicy::Never
         },
+        timeout: None,
     };
     tracing::debug!("fetch policy: {:?}", req.policy);
 
@@ -409,77 +402,7 @@ pub async fn lookup_submissions(
         .payload;
     let resp: FetchResponse = serde_json::from_slice(&resp)?;
 
-    Ok((StatusCode::OK, Json(resp.submissions)))
-}
-
-#[derive(Debug, Serialize, Deserialize, IntoParams)]
-pub struct FurAffinityFileQuery {
-    /// The search query. IDs, URLs, and filenames are accepted.
-    pub search: String,
-}
-
-/// Get information about a file on FurAffinity.
-#[utoipa::path(
-    get,
-    path = "/v1/file/furaffinity",
-    responses(
-        (status = 200, description = "File lookup completed successfully", body = [FurAffinityFile]),
-        (status = 400, description = "Unknown search input"),
-        (status = 429, description = "Rate limit exhausted"),
-    ),
-    params(
-        FurAffinityFileQuery,
-    ),
-    security(
-        ("api_key" = [])
-    )
-)]
-#[tracing::instrument(err, skip_all)]
-pub async fn lookup_furaffinity_file(
-    Extension(pool): Extension<PgPool>,
-    Extension(api_key): Extension<db::UserApiKey>,
-    Query(query): Query<FurAffinityFileQuery>,
-) -> Result<impl IntoResponse, ReportError> {
-    let headers = rate_limit!(&pool, api_key, &[("name", 1)]);
-
-    tracing::debug!("attempting to look up file: {}", query.search);
-
-    let file_name = Regex::new(
-        pomsky!(Start :id([digit]+ lazy) "." :name([!space]+) "." :extension([word]{3,4}) End),
-    )
-    .unwrap();
-
-    let results = if file_name.is_match(&query.search) {
-        tracing::trace!("searched appeared to be file name");
-
-        db::lookup_furaffinity_file(&pool, &query.search).await?
-    } else if let Ok(url) = url::Url::parse(&query.search) {
-        tracing::trace!("search appeared to be url");
-        static FURAFFINITY_HOSTS: &[&str] = &["facdn.net", "furaffinity.net"];
-        if !matches!(url.host_str(), Some(host) if FURAFFINITY_HOSTS.iter().any(|fa_host| host.contains(fa_host)))
-        {
-            tracing::trace!("search url had unknown host");
-            return Ok((StatusCode::BAD_REQUEST, headers).into_response());
-        }
-
-        let last_segment = url.path().split('/').last().unwrap_or_default();
-        tracing::trace!("identified last segment: {}", last_segment);
-        if !file_name.is_match(last_segment) {
-            tracing::trace!("search url did not end in furaffinity file name");
-            return Ok((StatusCode::BAD_REQUEST, headers).into_response());
-        }
-
-        db::lookup_furaffinity_file(&pool, last_segment).await?
-    } else if let Ok(id) = query.search.parse::<i32>() {
-        db::lookup_furaffinity_id(&pool, id).await?
-    } else {
-        tracing::trace!("search data was unknown");
-        return Ok((StatusCode::BAD_REQUEST, headers).into_response());
-    };
-
-    let results: Vec<FurAffinityFile> = results.into_iter().map(From::from).collect();
-
-    Ok((StatusCode::OK, headers, Json(results)).into_response())
+    Ok((StatusCode::OK, headers, Json(resp.submissions)).into_response())
 }
 
 /// Get the URL of the latest FuzzySearch database dump.
@@ -499,4 +422,122 @@ pub async fn dump_latest(
         .await?;
 
     Ok(url)
+}
+
+#[derive(Deserialize)]
+pub struct SocketQuery {
+    pub seq: Option<u64>,
+}
+
+pub async fn ws_live(
+    Extension(nats): Extension<async_nats::Client>,
+    Extension(token): Extension<CancellationToken>,
+    Extension(_api_key): Extension<db::UserApiKey>,
+    Query(query): Query<SocketQuery>,
+    ws: ws::WebSocketUpgrade,
+) -> Result<impl IntoResponse, ReportError> {
+    use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy};
+
+    let jetstream = async_nats::jetstream::new(nats);
+
+    let stream = jetstream.get_stream("fuzzysearch-submissions").await?;
+
+    let deliver_policy = match query.seq {
+        Some(start_sequence) if start_sequence > 0 => {
+            tracing::info!("starting consumer at seq {start_sequence}");
+            DeliverPolicy::ByStartSequence { start_sequence }
+        }
+        Some(start_sequence) if start_sequence == 0 => {
+            tracing::info!("starting consumer at beginning");
+            DeliverPolicy::All
+        }
+        _ => {
+            tracing::info!("starting consumer for new submissions");
+            DeliverPolicy::New
+        }
+    };
+
+    let consumer = stream
+        .create_consumer(async_nats::jetstream::consumer::pull::Config {
+            ack_policy: AckPolicy::None,
+            deliver_policy,
+            ..Default::default()
+        })
+        .await?;
+
+    let stream = consumer.messages().await?;
+
+    Ok(ws.on_upgrade(move |socket| handle_live_socket(socket, stream, token)))
+}
+
+#[derive(Serialize)]
+struct Payload {
+    seq: u64,
+    submission: serde_json::Value,
+}
+
+async fn handle_live_socket(
+    socket: ws::WebSocket,
+    mut stream: async_nats::jetstream::consumer::pull::Stream,
+    token: CancellationToken,
+) {
+    let (mut tx, mut rx) = socket.split();
+
+    let tx_token = token.clone();
+    let tx_task: JoinHandle<Result<_, ReportError>> = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = tx_token.cancelled() => {
+                    tracing::info!("got cancellation, ending tx task");
+                    if let Err(err) = tx.send(ws::Message::Close(Some(ws::CloseFrame {
+                        code: ws::close_code::NORMAL,
+                        reason: Cow::from("stream was cancelled"),
+                    }))).await {
+                        tracing::error!("could not send close frame: {err}");
+                    }
+                    break;
+                }
+                Some(Ok(msg)) = stream.next() => {
+                    let submission: serde_json::Value = serde_json::from_slice(&msg.payload)?;
+
+                    let payload = Payload {
+                        seq: msg.info().map_err(|err| eyre::eyre!(err))?.stream_sequence,
+                        submission,
+                    };
+
+                    let data = serde_json::to_vec(&payload)?;
+
+                    if let Err(err) = tx
+                        .send(ws::Message::Binary(data))
+                        .await
+                    {
+                        tracing::error!("could not send message: {err}");
+                        tx_token.cancel();
+                    } else {
+                        tracing::trace!(seq = payload.seq, "sent payload to client");
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    });
+
+    tokio::select! {
+        _ = token.cancelled() => {
+            tracing::info!("got cancellation");
+        }
+        None | Some(Err(_)) = rx.next() => {
+            tracing::info!("recv error");
+            token.cancel();
+        }
+        res = tx_task => {
+            match res {
+                Ok(Ok(_)) => tracing::info!("tx task ended"),
+                Ok(Err(err)) => tracing::error!("tx task had error: {err}"),
+                Err(err) => tracing::warn!("could not join tx task: {err}"),
+            }
+            token.cancel();
+        }
+    }
 }

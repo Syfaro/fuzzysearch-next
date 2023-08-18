@@ -1,11 +1,11 @@
 INSERT INTO
-    api_key (
-        user_id,
+    api.key (
+        account_id,
         name,
-        key,
+        token,
         name_limit,
         image_limit,
         hash_limit
     )
 VALUES
-    ((SELECT id FROM account WHERE uuid = $1), $2, $3, 60, 60, 30);
+    ($1, $2, $3, 60, 60, 30);

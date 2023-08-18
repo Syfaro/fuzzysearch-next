@@ -1,30 +1,5 @@
 {
   "db": "PostgreSQL",
-  "0e2881dd319b7b50e89d0c34f1d4c1bbe7a17feaa06bc3a4fded9c6466aeb48d": {
-    "describe": {
-      "columns": [
-        {
-          "name": "id",
-          "ordinal": 0,
-          "type_info": "Uuid"
-        }
-      ],
-      "nullable": [
-        false
-      ],
-      "parameters": {
-        "Left": [
-          "Uuid",
-          "Uuid",
-          "Text",
-          "Text",
-          "Bool",
-          "Jsonb"
-        ]
-      }
-    },
-    "query": "INSERT INTO submission_media (submission_id, media_id, site_media_id, url, deleted, extra)\n    VALUES ($1, $2, $3, $4, $5, $6)\n    ON CONFLICT DO NOTHING\n    RETURNING id;\n"
-  },
   "16a9c86dd416a568464b169d454c7fb87ef9f8a2fb0ec0fd9f664d7856a6ebff": {
     "describe": {
       "columns": [],
@@ -37,7 +12,105 @@
     },
     "query": "INSERT INTO submission_artist (submission_id, artist_id)\n    SELECT * FROM jsonb_to_recordset($1)\n        AS submission_artist (submission_id uuid, artist_id uuid)\n    ON CONFLICT DO NOTHING;\n"
   },
-  "6168a7003390dc607621a001d5c0e336c167f1a931bdaadb7ab56845f9cc1a74": {
+  "25dcf2a7eb3d50e3ea5994e897e30c38e9d6dfb36d191857ac0788cb70f7da16": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id!",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        },
+        {
+          "name": "site!",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "site_submission_id!",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "link!",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "title",
+          "ordinal": 4,
+          "type_info": "Text"
+        },
+        {
+          "name": "description",
+          "ordinal": 5,
+          "type_info": "Text"
+        },
+        {
+          "name": "rating",
+          "ordinal": 6,
+          "type_info": "Text"
+        },
+        {
+          "name": "posted_at",
+          "ordinal": 7,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "tags",
+          "ordinal": 8,
+          "type_info": "TextArray"
+        },
+        {
+          "name": "deleted!",
+          "ordinal": 9,
+          "type_info": "Bool"
+        },
+        {
+          "name": "retrieved_at",
+          "ordinal": 10,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "extra",
+          "ordinal": 11,
+          "type_info": "Jsonb"
+        },
+        {
+          "name": "artists: sqlx::types::Json<Vec<fuzzysearch_common::Artist>>",
+          "ordinal": 12,
+          "type_info": "Jsonb"
+        },
+        {
+          "name": "media: sqlx::types::Json<Vec<fuzzysearch_common::Media>>",
+          "ordinal": 13,
+          "type_info": "Jsonb"
+        }
+      ],
+      "nullable": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "parameters": {
+        "Left": [
+          "Jsonb"
+        ]
+      }
+    },
+    "query": "WITH search_query AS (\n\tSELECT\n\t\tsite.id site_id,\n\t\tquery.site_submission_id\n\tFROM jsonb_to_recordset($1) AS query (site TEXT, site_submission_id TEXT)\n\tJOIN site ON site.name = query.site\n)\nSELECT DISTINCT ON (submission_detail.site_id, submission_detail.site_submission_id)\n\tsubmission_detail.id \"id!\",\n\tsubmission_detail.site \"site!\",\n\tsubmission_detail.site_submission_id \"site_submission_id!\",\n\tsubmission_detail.link \"link!\",\n\tsubmission_detail.title,\n\tsubmission_detail.description,\n\tsubmission_detail.rating,\n\tsubmission_detail.posted_at,\n\tsubmission_detail.tags,\n\tsubmission_detail.deleted \"deleted!\",\n\tsubmission_detail.retrieved_at,\n\tsubmission_detail.extra,\n\tsubmission_detail.artists \"artists: sqlx::types::Json<Vec<fuzzysearch_common::Artist>>\",\n\tsubmission_detail.media \"media: sqlx::types::Json<Vec<fuzzysearch_common::Media>>\"\nFROM search_query\n\tJOIN submission_detail ON submission_detail.site_id = search_query.site_id AND submission_detail.site_submission_id = search_query.site_submission_id\nORDER BY\n\tsubmission_detail.site_id,\n\tsubmission_detail.site_submission_id,\n\tsubmission_detail.retrieved_at DESC NULLS LAST;\n"
+  },
+  "4cb07a94fe6b1d30141dcda6e63690909ce217e681d40e17ed736ef4fd7a2292": {
     "describe": {
       "columns": [
         {
@@ -65,7 +138,7 @@
         ]
       }
     },
-    "query": "INSERT INTO submission (site_id, site_submission_id, deleted, posted_at, link, title, tags, description, rating, retrieved_at, extra)\n    VALUES ((SELECT id FROM site WHERE name = $1), $2, $3, $4, $5, $6, $7::text[], $8, $9, $10, $11)\n    ON CONFLICT (site_id, site_submission_id, content_hash)\n        DO UPDATE SET retrieved_at = EXCLUDED.retrieved_at\n    RETURNING id;\n"
+    "query": "INSERT INTO submission (site_id, site_submission_id, deleted, posted_at, link, title, tags, description, rating, retrieved_at, extra)\n    VALUES ((SELECT id FROM site WHERE name = $1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)\n    ON CONFLICT DO NOTHING\n    RETURNING id;\n"
   },
   "63070fadd75c803f55a494fa97dea244a1682f0772687393ad65689991cb2551": {
     "describe": {
@@ -102,151 +175,29 @@
     },
     "query": "INSERT INTO media_frame (media_id, frame_index, perceptual_gradient)\n    SELECT * FROM jsonb_to_recordset($1)\n        AS frame (media_id uuid, frame_index bigint, perceptual_gradient bigint)\n    ON CONFLICT DO NOTHING;\n"
   },
-  "9bf1fef74afbe8d86fade959be65d19e4a3f3ed1593e73a1e0c892fed8bf0cf9": {
+  "7debadb757ba05af264ce7664d064d43d2c72a6798e287c81766c689a9ccd453": {
     "describe": {
       "columns": [
         {
           "name": "id",
           "ordinal": 0,
           "type_info": "Uuid"
-        },
-        {
-          "name": "site_name",
-          "ordinal": 1,
-          "type_info": "Text"
-        },
-        {
-          "name": "site_submission_id",
-          "ordinal": 2,
-          "type_info": "Text"
-        },
-        {
-          "name": "site_media_id",
-          "ordinal": 3,
-          "type_info": "Text"
-        },
-        {
-          "name": "link",
-          "ordinal": 4,
-          "type_info": "Text"
-        },
-        {
-          "name": "title",
-          "ordinal": 5,
-          "type_info": "Text"
-        },
-        {
-          "name": "description",
-          "ordinal": 6,
-          "type_info": "Text"
-        },
-        {
-          "name": "media_url",
-          "ordinal": 7,
-          "type_info": "Text"
-        },
-        {
-          "name": "submission_media_extra",
-          "ordinal": 8,
-          "type_info": "Jsonb"
-        },
-        {
-          "name": "file_sha256",
-          "ordinal": 9,
-          "type_info": "Bytea"
-        },
-        {
-          "name": "artists",
-          "ordinal": 10,
-          "type_info": "Jsonb"
-        },
-        {
-          "name": "rating",
-          "ordinal": 11,
-          "type_info": "Text"
-        },
-        {
-          "name": "posted_at",
-          "ordinal": 12,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "tags",
-          "ordinal": 13,
-          "type_info": "TextArray"
-        },
-        {
-          "name": "deleted",
-          "ordinal": 14,
-          "type_info": "Bool"
-        },
-        {
-          "name": "retrieved_at",
-          "ordinal": 15,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "extra",
-          "ordinal": 16,
-          "type_info": "Jsonb"
-        },
-        {
-          "name": "perceptual_gradient",
-          "ordinal": 17,
-          "type_info": "Int8"
-        },
-        {
-          "name": "media_id?",
-          "ordinal": 18,
-          "type_info": "Uuid"
-        },
-        {
-          "name": "file_size",
-          "ordinal": 19,
-          "type_info": "Int8"
-        },
-        {
-          "name": "mime_type",
-          "ordinal": 20,
-          "type_info": "Text"
-        },
-        {
-          "name": "frame_index?",
-          "ordinal": 21,
-          "type_info": "Int8"
         }
       ],
       "nullable": [
-        false,
-        false,
-        false,
-        true,
-        false,
-        true,
-        true,
-        true,
-        true,
-        true,
-        null,
-        true,
-        true,
-        null,
-        null,
-        true,
-        true,
-        true,
-        false,
-        true,
-        true,
         false
       ],
       "parameters": {
         "Left": [
+          "Uuid",
+          "Uuid",
+          "Text",
+          "Text",
           "Jsonb"
         ]
       }
     },
-    "query": "WITH search_query AS (\n    SELECT\n        site.id site_id,\n        query.submission_id\n    FROM jsonb_to_recordset($1)\n        AS query (site_name TEXT, submission_id TEXT)\n    JOIN site ON site.name = query.site_name\n)\nSELECT\n\tDISTINCT ON (submission.site_id, submission.site_submission_id, submission_media.site_media_id)\n\tsubmission.id,\n\tsite.name site_name,\n\tsubmission.site_submission_id,\n\tsubmission_media.site_media_id,\n\tsubmission.link,\n\tsubmission.title,\n\tsubmission.description,\n\tsubmission_media.url media_url,\n\tsubmission_media.extra submission_media_extra,\n\tmedia.file_sha256 file_sha256,\n\t(\n\t\tSELECT\n\t\t\tjsonb_agg(jsonb_build_object('name', artist.display_name, 'link', artist.link))\n\t\tFROM submission_artist\n\t\t\tJOIN artist ON artist.id = submission_artist.artist_id\n\t\tWHERE submission_artist.submission_id = submission.id\n\t) artists,\n\tsubmission.rating,\n\tsubmission.posted_at,\n\tsubmission.tags::text[],\n\t(submission.deleted OR submission_media.deleted) deleted,\n\tsubmission.retrieved_at,\n\tsubmission.extra,\n\tmedia_frame.perceptual_gradient,\n\tmedia.id \"media_id?\",\n\tmedia.file_size,\n\tmedia.mime_type,\n\tmedia_frame.frame_index \"frame_index?\"\nFROM search_query\n    JOIN submission ON submission.site_id = search_query.site_id AND submission.site_submission_id = search_query.submission_id\n\tJOIN site ON site.id = submission.site_id\n\tLEFT JOIN submission_media ON submission_media.submission_id = submission.id\n\tLEFT JOIN media ON media.id = submission_media.media_id\n\tLEFT JOIN media_frame ON media_frame.media_id = media.id\nORDER BY\n\tsubmission.site_id,\n\tsubmission.site_submission_id,\n\tsubmission_media.site_media_id,\n\tmedia_frame.frame_index,\n\tsubmission.retrieved_at DESC NULLS LAST\n"
+    "query": "INSERT INTO submission_media (submission_id, media_id, site_media_id, url, extra)\n    VALUES ($1, $2, $3, $4, $5)\n    ON CONFLICT DO NOTHING\n    RETURNING id;\n"
   },
   "af80bca1225e91582184050d51a649d347b1febf4bf9c6351e4f21a9718233ab": {
     "describe": {

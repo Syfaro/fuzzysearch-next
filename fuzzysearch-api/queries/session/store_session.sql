@@ -1,5 +1,5 @@
 INSERT INTO
-    session (id, expires_at, data)
+    api.session (id, expires_at, data)
 VALUES
     ($1, $2, $3) ON CONFLICT (id) DO
 UPDATE

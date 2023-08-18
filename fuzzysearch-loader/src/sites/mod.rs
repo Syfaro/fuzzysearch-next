@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use eyre::eyre;
 use foxlib::hash::image::AnimationDecoder;
 use futures::{stream::FuturesUnordered, TryStreamExt};
-use fuzzysearch_common::{Media, MediaFrame, Site, Submission};
+use fuzzysearch_common::{Artist, Media, MediaFrame, Site, Submission};
 use lazy_static::lazy_static;
 use object_store::path::Path;
 use prometheus::{
@@ -221,24 +221,20 @@ pub async fn process_file(
 
         return Ok(Media {
             site_id,
-            deleted: false,
             url: Some(url.to_string()),
-            file_sha256: Some(sha256.to_vec()),
+            file_sha256: Some(sha256.try_into().unwrap()),
             file_size: Some(file_size as i64),
             mime_type,
-            frames: media
-                .perceptual_gradients
-                .map(|perceptual_gradients| {
-                    perceptual_gradients
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, perceptual_gradient)| MediaFrame {
-                            frame_index: idx as i64,
-                            perceptual_gradient: Some(perceptual_gradient.to_be_bytes()),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
+            frames: media.perceptual_gradients.map(|perceptual_gradients| {
+                perceptual_gradients
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, perceptual_gradient)| MediaFrame {
+                        frame_index: idx as i64,
+                        perceptual_gradient: Some(perceptual_gradient),
+                    })
+                    .collect()
+            }),
             extra: None,
         });
     }
@@ -306,18 +302,17 @@ pub async fn process_file(
         .enumerate()
         .map(|(index, frame)| MediaFrame {
             frame_index: index as i64,
-            perceptual_gradient: Some(frame.0),
+            perceptual_gradient: Some(frame.into()),
         })
         .collect();
 
     Ok(Media {
         site_id,
-        deleted: false,
         url: Some(url.to_string()),
-        file_sha256: Some(sha256.to_vec()),
+        file_sha256: Some(sha256.try_into().unwrap()),
         file_size: Some(file_size as i64),
         mime_type,
-        frames,
+        frames: Some(frames),
         extra: None,
     })
 }
@@ -444,10 +439,13 @@ async fn insert_media(tx: &mut Transaction<'_, Postgres>, media: &Media) -> eyre
 
     let media_id = sqlx::query_file_scalar!(
         "queries/media_insert.sql",
-        media.file_sha256,
+        media
+            .file_sha256
+            .as_ref()
+            .map(|file_sha256| file_sha256 as &[u8]),
         media.file_size,
         media.mime_type,
-        media.frames.len() == 1
+        media.frames.as_deref().unwrap_or_default().len() == 1
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -468,13 +466,15 @@ async fn insert_media(tx: &mut Transaction<'_, Postgres>, media: &Media) -> eyre
 
     let frames: Vec<_> = media
         .frames
+        .as_deref()
+        .unwrap_or_default()
         .iter()
         .enumerate()
         .map(|(index, frame)| {
             serde_json::json!({
                 "media_id": media_id,
                 "frame_index": index,
-                "perceptual_gradient": frame.perceptual_gradient.map(i64::from_be_bytes),
+                "perceptual_gradient": frame.perceptual_gradient,
             })
         })
         .collect();
@@ -505,7 +505,6 @@ async fn link_submission_media(
         media_id,
         media.site_id,
         media.url,
-        media.deleted,
         media.extra,
     )
     .fetch_optional(&mut *tx)
@@ -597,105 +596,19 @@ pub async fn insert_submission(
 #[derive(Debug)]
 pub struct DbSubmission {
     pub id: Uuid,
-    pub site_name: String,
+    pub site: String,
     pub site_submission_id: String,
-    pub site_media_id: Option<String>,
     pub link: String,
     pub title: Option<String>,
     pub description: Option<String>,
-    pub media_url: Option<String>,
-    pub file_sha256: Option<Vec<u8>>,
-    pub artists: Option<serde_json::Value>,
     pub rating: Option<String>,
     pub posted_at: Option<chrono::DateTime<chrono::Utc>>,
     pub tags: Option<Vec<String>>,
-    pub deleted: Option<bool>,
+    pub deleted: bool,
     pub retrieved_at: Option<chrono::DateTime<chrono::Utc>>,
     pub extra: Option<serde_json::Value>,
-    pub perceptual_gradient: Option<i64>,
-    pub media_id: Option<Uuid>,
-    pub file_size: Option<i64>,
-    pub mime_type: Option<String>,
-    pub submission_media_extra: Option<serde_json::Value>,
-    pub frame_index: Option<i64>,
-}
-
-#[tracing::instrument(skip_all)]
-pub fn collapse_db_submissions(
-    db_submissions: Vec<DbSubmission>,
-) -> eyre::Result<HashMap<(Site, String), Submission>> {
-    tracing::debug!(len = db_submissions.len(), "collapsing submissions");
-
-    let mut media_frames: HashMap<Uuid, Vec<MediaFrame>> =
-        HashMap::with_capacity(db_submissions.len());
-    for sub in &db_submissions {
-        if let Some(media_id) = sub.media_id {
-            media_frames.entry(media_id).or_default().push(MediaFrame {
-                frame_index: sub
-                    .frame_index
-                    .tap_none(|| tracing::warn!("media frame was missing frame index"))
-                    .unwrap_or_default(),
-                perceptual_gradient: sub.perceptual_gradient.map(i64::to_be_bytes),
-            });
-        }
-    }
-    tracing::trace!(len = media_frames.len(), "found frames");
-
-    let mut media: HashMap<Uuid, Vec<Media>> = HashMap::with_capacity(media_frames.len());
-    for sub in &db_submissions {
-        media.entry(sub.id).or_default().push(Media {
-            site_id: sub.site_media_id.clone(),
-            deleted: sub.deleted.unwrap_or_default(),
-            url: sub.media_url.clone(),
-            file_sha256: sub.file_sha256.clone(),
-            file_size: sub.file_size,
-            mime_type: sub.mime_type.clone(),
-            frames: sub
-                .media_id
-                .and_then(|media_id| media_frames.get(&media_id).cloned())
-                .unwrap_or_default(),
-            extra: sub.submission_media_extra.clone(),
-        });
-    }
-    tracing::trace!(len = media.len(), "found media");
-
-    let mut submissions = HashMap::with_capacity(media.len());
-    for db_submission in db_submissions {
-        let site = serde_plain::from_str(&db_submission.site_name)?;
-        let rating = db_submission
-            .rating
-            .map(|rating| serde_plain::from_str(&rating))
-            .transpose()?;
-
-        submissions
-            .entry((site, db_submission.site_submission_id.clone()))
-            .or_insert_with(|| Submission {
-                id: Some(db_submission.id),
-                site,
-                submission_id: db_submission.site_submission_id,
-                deleted: db_submission.deleted.unwrap_or_default(),
-                posted_at: db_submission.posted_at,
-                link: db_submission.link,
-                title: db_submission.title,
-                artists: db_submission
-                    .artists
-                    .map(serde_json::from_value)
-                    .transpose()
-                    .tap_err(|err| tracing::error!("could not deserialize artists: {err}"))
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default(),
-                tags: db_submission.tags.unwrap_or_default(),
-                description: db_submission.description,
-                rating,
-                media: media.get(&db_submission.id).cloned().unwrap_or_default(),
-                retrieved_at: db_submission.retrieved_at,
-                extra: db_submission.extra,
-            });
-    }
-    tracing::debug!(len = submissions.len(), "found unique submissions");
-
-    Ok(submissions)
+    pub artists: Option<sqlx::types::Json<Vec<Artist>>>,
+    pub media: Option<sqlx::types::Json<Vec<Media>>>,
 }
 
 trait Slug<'a> {
@@ -730,12 +643,12 @@ async fn notify_submission(
     nats.publish(subject, data.into()).await?;
 
     for media in &submission.media {
-        for frame in &media.frames {
+        for frame in media.frames.as_deref().unwrap_or_default() {
             if let Some(perceptual_gradient) = frame.perceptual_gradient {
                 nats.publish(
                     "fuzzysearch.bkapi.add".to_string(),
                     serde_json::to_vec(&serde_json::json!({
-                        "hash": i64::from_be_bytes(perceptual_gradient),
+                        "hash": perceptual_gradient,
                     }))?
                     .into(),
                 )

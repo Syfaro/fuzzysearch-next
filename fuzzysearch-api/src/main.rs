@@ -1,6 +1,5 @@
-use std::{fmt::Display, net::SocketAddr, sync::Arc, time::Duration};
+use std::{fmt::Display, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
-use async_nats::ServerAddr;
 use axum::{
     async_trait,
     http::{header::HeaderName, Method, StatusCode},
@@ -22,6 +21,7 @@ use prometheus::{register_histogram, Histogram};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use tokio_util::sync::CancellationToken;
 use tower::ServiceBuilder;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -56,9 +56,9 @@ struct Config {
     database_url: String,
 
     #[clap(long, env)]
-    nats_host: ServerAddr,
+    nats_url: String,
     #[clap(long, env)]
-    nats_nkey: String,
+    nats_creds: PathBuf,
 
     #[clap(long, env)]
     session_secret: String,
@@ -109,11 +109,11 @@ async fn main() -> eyre::Result<()> {
     foxlib::MetricsServer::serve(config.metrics_host, true).await;
 
     let pool = PgPool::connect(&config.database_url).await?;
-
     let bkapi = BKApiClient::new(config.bkapi_endpoint);
 
-    let nats = async_nats::ConnectOptions::with_nkey(config.nats_nkey)
-        .connect(config.nats_host)
+    let nats = async_nats::ConnectOptions::with_credentials_file(config.nats_creds)
+        .await?
+        .connect(config.nats_url)
         .await?;
 
     let client = reqwest::ClientBuilder::default()
@@ -127,6 +127,8 @@ async fn main() -> eyre::Result<()> {
     )
     .await
     .expect("could not create unleash client");
+
+    let token = CancellationToken::new();
 
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
@@ -144,21 +146,18 @@ async fn main() -> eyre::Result<()> {
         .route("/image", routing::post(api::search_image_by_upload))
         .route("/url", routing::get(api::search_image_by_url))
         .route("/submission", routing::post(api::lookup_submissions))
-        .route(
-            "/file/furaffinity",
-            routing::get(api::lookup_furaffinity_file),
-        )
+        .route("/live", routing::get(api::ws_live))
         .route_layer(middleware::from_fn(db::extract_api_key));
 
     let api = Router::new()
         .merge(authenticated_api)
-        .route("/handle/:service", routing::get(api::check_handle))
         .route("/dump/latest", routing::get(api::dump_latest))
         .layer(api_layer);
 
     let app_layer = ServiceBuilder::new()
         .layer(Extension(pool.clone()))
         .layer(Extension(unleash))
+        .layer(Extension(token.clone()))
         .layer(TraceLayer::new_for_http());
 
     let url = Url::parse(&format!("https://{}", config.rp_id)).unwrap();
@@ -203,7 +202,10 @@ async fn main() -> eyre::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
     tracing::info!("starting on {}", addr);
 
-    Server::bind(&addr).serve(app.into_make_service()).await?;
+    Server::bind(&addr)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown_signal(token))
+        .await?;
 
     Ok(())
 }
@@ -233,6 +235,33 @@ impl IntoResponse for ReportError {
         )
             .into_response()
     }
+}
+
+async fn shutdown_signal(token: CancellationToken) {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install ctrl+c handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install terminate handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    tracing::info!("signal received, cancelling");
+    token.cancel();
 }
 
 #[derive(Clone, Debug)]

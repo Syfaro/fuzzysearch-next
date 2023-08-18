@@ -1,4 +1,7 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
+use serde_with::{hex::Hex, serde_as, DisplayFromStr, DurationMilliSeconds, PickFirst};
 
 #[cfg(feature = "api-types")]
 use utoipa::ToSchema;
@@ -205,10 +208,8 @@ pub enum Site {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
 pub struct Artist {
-    /// An ID for the artist on the site. Often just their username.
-    #[serde(skip)]
+    /// An ID for the artist on the site.
     pub site_artist_id: String,
-
     /// The artist's name.
     pub name: String,
     /// A link to the artist's page, if one exists.
@@ -252,6 +253,7 @@ pub struct Submission {
 }
 
 /// Media from a submission.
+#[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
 pub struct Media {
@@ -259,31 +261,32 @@ pub struct Media {
     ///
     /// Not all sites use this.
     pub site_id: Option<String>,
-    /// If the media was deleted.
-    pub deleted: bool,
     /// The URL to this media.
     pub url: Option<String>,
     /// The SHA256 hash of the file.
-    pub file_sha256: Option<Vec<u8>>,
+    #[serde_as(as = "Option<Hex>")]
+    pub file_sha256: Option<[u8; 32]>,
     /// The size of the file.
     pub file_size: Option<i64>,
     /// The mime type of the file.
     pub mime_type: Option<String>,
     /// Any processed frames of this media.
-    pub frames: Vec<MediaFrame>,
+    pub frames: Option<Vec<MediaFrame>>,
     /// Arbitrary extra data for this media on the related submission.
     #[cfg_attr(feature = "api-types", schema(value_type = Object))]
     pub extra: Option<serde_json::Value>,
 }
 
 /// A processed frame of some media.
+#[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
 pub struct MediaFrame {
     /// The index of the frame.
     pub frame_index: i64,
     /// A perceptual gradient hash of the frame.
-    pub perceptual_gradient: Option<[u8; 8]>,
+    #[serde_as(as = "Option<PickFirst<(DisplayFromStr, _)>>")]
+    pub perceptual_gradient: Option<i64>,
 }
 
 impl std::fmt::Display for Site {
@@ -300,6 +303,7 @@ impl std::fmt::Display for Site {
 }
 
 /// A request to load data from a site.
+#[serde_as]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FetchRequest {
     /// Selection for which submissions to load.
@@ -307,6 +311,9 @@ pub struct FetchRequest {
     /// The policy to use for fetching submissions.
     #[serde(default)]
     pub policy: FetchPolicy,
+    /// Maximum amount of time to spend attempting to fetch a submission.
+    #[serde_as(as = "Option<DurationMilliSeconds<u64>>")]
+    pub timeout: Option<Duration>,
 }
 
 /// The way to identify submissions to load.
@@ -359,8 +366,20 @@ pub struct FetchResponse {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
+pub struct FetchedSubmission {
+    /// The site for the requested submission.
+    pub site: Site,
+    /// The ID of the requested submission.
+    pub submission_id: String,
+    /// Result from fetching this submission.
+    #[serde(flatten)]
+    pub submission: FetchedSubmissionData,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "api-types", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
-pub enum FetchedSubmission {
+pub enum FetchedSubmissionData {
     // The submission was successfully loaded.
     Success {
         /// How the submission was fetched.
@@ -370,10 +389,6 @@ pub enum FetchedSubmission {
     },
     /// An error occured loading this submission.
     Error {
-        /// The site for the requested submission.
-        site: Site,
-        /// The ID of the requested submission.
-        submission_id: String,
         /// A message about why it failed to load.
         message: Option<String>,
     },

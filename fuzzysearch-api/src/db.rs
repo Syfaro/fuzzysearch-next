@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use axum::{
     http::{HeaderMap, HeaderValue, Request, StatusCode},
@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
 use fuzzysearch_common::*;
+use uuid::Uuid;
 
 const RATE_LIMIT_WINDOW: i64 = 60;
 
@@ -62,13 +63,13 @@ lazy_static! {
 
 #[derive(Clone)]
 pub struct UserApiKey {
-    pub id: i32,
-    pub user_id: i32,
-    pub key: String,
-    pub name: Option<String>,
-    pub name_limit: i16,
-    pub image_limit: i16,
-    pub hash_limit: i16,
+    pub id: Uuid,
+    pub account_id: Uuid,
+    pub token: String,
+    pub name: String,
+    pub name_limit: i32,
+    pub image_limit: i32,
+    pub hash_limit: i32,
 }
 
 pub async fn extract_api_key<B>(
@@ -96,10 +97,10 @@ pub async fn extract_api_key<B>(
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
     tracing::debug!(
-        api_key_id = api_key.id,
-        user_id = api_key.user_id,
+        api_key_id = %api_key.id,
+        account_id = %api_key.account_id,
         "found valid api key in request: {}",
-        api_key.name.as_deref().unwrap_or("unknown")
+        api_key.name
     );
 
     req.extensions_mut().insert(api_key);
@@ -110,7 +111,7 @@ pub async fn extract_api_key<B>(
 #[derive(Debug, Serialize)]
 struct BucketCount<'a> {
     bucket: &'a str,
-    count: i16,
+    count: i32,
 }
 
 pub struct RateLimitData {
@@ -147,8 +148,8 @@ impl RateLimitData {
 
 pub struct RateLimitBucket {
     pub bucket: String,
-    pub allowed: i16,
-    pub used: i16,
+    pub allowed: i32,
+    pub used: i32,
 }
 
 impl RateLimitBucket {
@@ -162,11 +163,11 @@ impl RateLimitBucket {
 }
 
 impl UserApiKey {
-    #[tracing::instrument(err, skip_all, fields(api_key_id = self.id))]
+    #[tracing::instrument(err, skip_all, fields(api_key_id = %self.id))]
     pub async fn rate_limit(
         &self,
         pool: &PgPool,
-        buckets: &[(&str, i16)],
+        buckets: &[(&str, i32)],
     ) -> eyre::Result<(bool, RateLimitData)> {
         let now = chrono::Utc::now();
         let timestamp = now.timestamp();
@@ -237,7 +238,7 @@ impl UserApiKey {
         Ok((over_limit, rate_limit_data))
     }
 
-    fn buckets(&self) -> HashMap<String, i16> {
+    fn buckets(&self) -> HashMap<String, i32> {
         [
             ("name".to_string(), self.name_limit),
             ("image".to_string(), self.image_limit),
@@ -365,6 +366,10 @@ pub async fn lookup_hashes(
 ) -> eyre::Result<Vec<SearchResult>> {
     tracing::info!(distance, "starting lookup for hashes: {:?}", hashes);
 
+    if matches!(refresh_days, Some(days) if days < 1) {
+        eyre::bail!("submissions may only be loaded once per day");
+    }
+
     let bkapi_timer = BKAPI_TIME.start_timer();
     let related_hashes = bkapi.search_many(hashes, distance).await?;
     tracing::debug!(
@@ -387,14 +392,14 @@ pub async fn lookup_hashes(
 
     let req = FetchRequest {
         query: SubmissionQuery::PerceptualHash { hashes: all_hashes },
-        policy: if let Some(days) = refresh_days {
-            FetchPolicy::Maybe {
+        policy: match refresh_days {
+            Some(days) if distance <= 3 => FetchPolicy::Maybe {
                 older_than: chrono::Utc::now() - chrono::Duration::days(days),
                 return_stale: true,
-            }
-        } else {
-            FetchPolicy::Never
+            },
+            _ => FetchPolicy::Never,
         },
+        timeout: Some(Duration::from_secs(10)),
     };
     tracing::debug!("fetch policy: {:?}", req.policy);
 
@@ -412,13 +417,16 @@ pub async fn lookup_hashes(
         .submissions
         .into_iter()
         .flat_map(|fetched_submission| match fetched_submission {
-            FetchedSubmission::Success { submission, .. } => Some(submission),
+            FetchedSubmission {
+                submission: FetchedSubmissionData::Success { submission, .. },
+                ..
+            } => Some(submission),
             _ => None,
         })
         .flat_map(|submission| {
             let media = submission.media.first()?;
-            let media_frame = media.frames.first()?;
-            let hash = i64::from_be_bytes(media_frame.perceptual_gradient?);
+            let media_frame = media.frames.as_deref().unwrap_or_default().first()?;
+            let hash = media_frame.perceptual_gradient?;
             let hash_info = hash_lookup.get(&hash)?;
 
             let site_info = match submission.site {
@@ -493,33 +501,6 @@ pub async fn lookup_hashes(
     if results.is_empty() {
         NO_HASH_SEARCH_RESULTS.inc();
     }
-
-    Ok(results)
-}
-
-#[tracing::instrument(err, skip(pool))]
-pub async fn lookup_furaffinity_file(
-    pool: &PgPool,
-    file: &str,
-) -> eyre::Result<Vec<FurAffinityFile>> {
-    let results = sqlx::query_file_as!(
-        DbFurAffinityFile,
-        "queries/lookup_furaffinity_filename.sql",
-        file
-    )
-    .map(FurAffinityFile::from)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(results)
-}
-
-#[tracing::instrument(err, skip(pool))]
-pub async fn lookup_furaffinity_id(pool: &PgPool, id: i32) -> eyre::Result<Vec<FurAffinityFile>> {
-    let results = sqlx::query_file_as!(DbFurAffinityFile, "queries/lookup_furaffinity_id.sql", id)
-        .map(FurAffinityFile::from)
-        .fetch_all(pool)
-        .await?;
 
     Ok(results)
 }

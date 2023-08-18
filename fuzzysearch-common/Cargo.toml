@@ -13,5 +13,6 @@ publish = false
 chrono = { version = "0.4.23", features = ["serde"] }
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.93"
+serde_with = { version = "3.2.0", features = ["hex"] }
 utoipa = { version = "3.4.0", optional = true }
-uuid = "1.4.1"
+uuid = { version = "1.4.1", features = ["serde"] }

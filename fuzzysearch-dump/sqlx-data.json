@@ -1,216 +1,6 @@
 {
   "db": "PostgreSQL",
-  "2eafbfe2d540b679670e7e2c7992a0d7e008e4543cc74a1a9415063c22cc5b02": {
-    "describe": {
-      "columns": [
-        {
-          "name": "estimate",
-          "ordinal": 0,
-          "type_info": "Int8"
-        }
-      ],
-      "nullable": [
-        null
-      ],
-      "parameters": {
-        "Left": []
-      }
-    },
-    "query": "SELECT sum(reltuples)::bigint AS estimate FROM pg_class WHERE relname IN ('submission', 'weasyl', 'e621');\n"
-  },
-  "515b22e2b5dde72ae94b12c713ac9c5f3843d154f8e9fc8c936d6d8f3203df16": {
-    "describe": {
-      "columns": [
-        {
-          "name": "id!",
-          "ordinal": 0,
-          "type_info": "Int4"
-        },
-        {
-          "name": "artist_name",
-          "ordinal": 1,
-          "type_info": "Text"
-        },
-        {
-          "name": "hash_int",
-          "ordinal": 2,
-          "type_info": "Int8"
-        },
-        {
-          "name": "posted_at",
-          "ordinal": 3,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "updated_at",
-          "ordinal": 4,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "file_sha256",
-          "ordinal": 5,
-          "type_info": "Bytea"
-        },
-        {
-          "name": "deleted!",
-          "ordinal": 6,
-          "type_info": "Bool"
-        },
-        {
-          "name": "url",
-          "ordinal": 7,
-          "type_info": "Text"
-        }
-      ],
-      "nullable": [
-        false,
-        true,
-        true,
-        true,
-        true,
-        true,
-        false,
-        true
-      ],
-      "parameters": {
-        "Left": []
-      }
-    },
-    "query": "SELECT\n    submission.id \"id!\",\n    artist.name \"artist_name\",\n    submission.hash_int,\n    submission.posted_at,\n    submission.updated_at,\n    submission.file_sha256,\n    submission.deleted \"deleted!\",\n    submission.url\nFROM\n    submission\n    LEFT JOIN artist ON artist.id = submission.artist_id;\n"
-  },
-  "640c92aea1c548fd30edad353caea358bf1a68a00308bb1c020ad4ae57b7d153": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      }
-    },
-    "query": "INSERT INTO\n    dump (url)\nVALUES\n    ($1);\n"
-  },
-  "67244987f1649b916de89ebdb67b72006b386357868c46b67a0787bb63a33d0f": {
-    "describe": {
-      "columns": [
-        {
-          "name": "id",
-          "ordinal": 0,
-          "type_info": "Int4"
-        },
-        {
-          "name": "owner",
-          "ordinal": 1,
-          "type_info": "Text"
-        },
-        {
-          "name": "hash",
-          "ordinal": 2,
-          "type_info": "Int8"
-        },
-        {
-          "name": "posted_at",
-          "ordinal": 3,
-          "type_info": "Text"
-        },
-        {
-          "name": "sha256",
-          "ordinal": 4,
-          "type_info": "Bytea"
-        },
-        {
-          "name": "deleted",
-          "ordinal": 5,
-          "type_info": "Bool"
-        },
-        {
-          "name": "submission",
-          "ordinal": 6,
-          "type_info": "Text"
-        }
-      ],
-      "nullable": [
-        false,
-        null,
-        true,
-        null,
-        true,
-        false,
-        null
-      ],
-      "parameters": {
-        "Left": []
-      }
-    },
-    "query": "SELECT\n    id,\n    data->>'owner' \"owner\",\n    hash,\n    data->>'posted_at' \"posted_at\",\n    sha256,\n    deleted,\n    data->'media'->'submission'->0->>'url' \"submission\"\nFROM\n    weasyl;\n"
-  },
-  "696118c630b4db9bf80ded13273553578e7e195a374210416c5182b088109e0d": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      }
-    },
-    "query": "DELETE FROM\n    dump\nWHERE\n    url = $1;\n"
-  },
-  "8ed6ad35a0274640bcecef484274515103da2c7d9f86721e44bd259c3c28c48d": {
-    "describe": {
-      "columns": [
-        {
-          "name": "id",
-          "ordinal": 0,
-          "type_info": "Int4"
-        },
-        {
-          "name": "artists",
-          "ordinal": 1,
-          "type_info": "TextArray"
-        },
-        {
-          "name": "hash",
-          "ordinal": 2,
-          "type_info": "Int8"
-        },
-        {
-          "name": "created_at",
-          "ordinal": 3,
-          "type_info": "Text"
-        },
-        {
-          "name": "sha256",
-          "ordinal": 4,
-          "type_info": "Bytea"
-        },
-        {
-          "name": "deleted",
-          "ordinal": 5,
-          "type_info": "Bool"
-        },
-        {
-          "name": "content_url",
-          "ordinal": 6,
-          "type_info": "Text"
-        }
-      ],
-      "nullable": [
-        false,
-        null,
-        true,
-        null,
-        true,
-        false,
-        null
-      ],
-      "parameters": {
-        "Left": []
-      }
-    },
-    "query": "SELECT\n    id,\n    array(\n        select\n            jsonb_array_elements_text(data->'tags'->'artist')\n    ) \"artists\",\n    hash,\n    data->>'created_at' \"created_at\",\n    sha256,\n    deleted,\n    data->'file'->>'url' \"content_url\"\nFROM\n    e621;\n"
-  },
-  "c178483d8b40dd3f9c26afb0cc9a64d0d4c6d76e7024734d85fe5d04db4bfcfa": {
+  "53890793cd861ae98b21d5659e90a40cf801f4a516066e745abd0b1c9612068b": {
     "describe": {
       "columns": [
         {
@@ -226,6 +16,102 @@
         "Left": []
       }
     },
-    "query": "SELECT\n    url\nFROM\n    dump\nWHERE\n    created_at < current_timestamp - interval '14 days'\n    AND created_at <> (\n        SELECT\n            max(created_at)\n        FROM\n            dump\n    );\n"
+    "query": "SELECT\n    url\nFROM\n    api.dump\nWHERE\n    created_at < current_timestamp - interval '14 days'\n    AND created_at <> (\n        SELECT\n            max(created_at)\n        FROM\n            api.dump\n    );\n"
+  },
+  "66f528fca72b22cad8690f04338eec8ead3d880ba90a1a35a99233b028ef214a": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "DELETE FROM\n    api.dump\nWHERE\n    url = $1;\n"
+  },
+  "728e7cd5fdb0cb638e3e908210c90b8ac154365636aeca0d938da544bf62afc2": {
+    "describe": {
+      "columns": [
+        {
+          "name": "estimate",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        null
+      ],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "SELECT reltuples::bigint AS estimate FROM pg_class WHERE relname = 'submission';\n"
+  },
+  "979873dec4969ab1e00aaa52bd5284b92838c4e02934440e6e31cc14b49fbe21": {
+    "describe": {
+      "columns": [
+        {
+          "name": "site!",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "site_submission_id!",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "artists: sqlx::types::Json<Vec<fuzzysearch_common::Artist>>",
+          "ordinal": 2,
+          "type_info": "Jsonb"
+        },
+        {
+          "name": "posted_at",
+          "ordinal": 3,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "retrieved_at",
+          "ordinal": 4,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "deleted!",
+          "ordinal": 5,
+          "type_info": "Bool"
+        },
+        {
+          "name": "media: sqlx::types::Json<Vec<fuzzysearch_common::Media>>",
+          "ordinal": 6,
+          "type_info": "Jsonb"
+        }
+      ],
+      "nullable": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "SELECT\n    site \"site!\",\n    site_submission_id \"site_submission_id!\",\n    artists \"artists: sqlx::types::Json<Vec<fuzzysearch_common::Artist>>\",\n    posted_at,\n    retrieved_at,\n    deleted \"deleted!\",\n    media \"media: sqlx::types::Json<Vec<fuzzysearch_common::Media>>\"\nFROM submission_latest;\n"
+  },
+  "dbcb1e00a3124c05d23c404a921ef98f0eb5b04df7cddea65983657cf0fb478d": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    api.dump (url)\nVALUES\n    ($1);\n"
   }
 }

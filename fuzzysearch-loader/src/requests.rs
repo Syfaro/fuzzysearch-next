@@ -5,12 +5,13 @@ use std::{collections::HashMap, sync::Arc};
 use async_nats::Message;
 use bytes::Bytes;
 use fuzzysearch_common::{
-    FetchPolicy, FetchRequest, FetchResponse, FetchStatus, FetchedSubmission, Site, Submission,
-    SubmissionQuery,
+    FetchPolicy, FetchRequest, FetchResponse, FetchStatus, FetchedSubmission,
+    FetchedSubmissionData, Site, Submission, SubmissionQuery,
 };
 use serde::Serialize;
 use sqlx::PgPool;
 use tap::TapFallible;
+use tracing::Instrument;
 
 use crate::sites::{BoxSite, LoadSubmissions, SubmissionResult};
 
@@ -30,8 +31,8 @@ async fn fetch_existing_submissions(
         .iter()
         .map(|(site, id)| {
             serde_json::json!({
-                "site_name": site.to_string(),
-                "submission_id": id,
+                "site": site.to_string(),
+                "site_submission_id": id,
             })
         })
         .collect();
@@ -48,12 +49,47 @@ async fn fetch_existing_submissions(
         code: 503,
     })?;
 
-    crate::sites::collapse_db_submissions(submissions).map_err(|err| {
-        async_nats::service::error::Error {
+    submissions
+        .into_iter()
+        .map(|submission| {
+            let site = serde_plain::from_str(&submission.site)?;
+            let rating = submission
+                .rating
+                .map(|rating| serde_plain::from_str(&rating))
+                .transpose()?;
+
+            let key = (site, submission.site_submission_id.clone());
+
+            let submission = Submission {
+                id: Some(submission.id),
+                site,
+                submission_id: submission.site_submission_id,
+                deleted: submission.deleted,
+                posted_at: submission.posted_at,
+                link: submission.link,
+                title: submission.title,
+                artists: submission
+                    .artists
+                    .map(|artists| artists.0)
+                    .unwrap_or_default(),
+                tags: submission.tags.unwrap_or_default(),
+                description: submission.description,
+                rating,
+                media: submission
+                    .media
+                    .map(|artists| artists.0)
+                    .unwrap_or_default(),
+                retrieved_at: submission.retrieved_at,
+                extra: submission.extra,
+            };
+
+            Ok((key, submission))
+        })
+        .collect::<eyre::Result<HashMap<_, _>>>()
+        .map_err(|err| async_nats::service::error::Error {
             status: err.to_string(),
             code: 503,
-        }
-    })
+        })
 }
 
 #[tracing::instrument(skip_all)]
@@ -93,9 +129,9 @@ pub async fn handle_fetch(
         }
     };
 
-    if submission_ids.len() > 100 {
+    if submission_ids.len() > 25 {
         return Err(async_nats::service::error::Error {
-            status: format!("request had too many submissions"),
+            status: "request had too many submissions".to_string(),
             code: 418,
         });
     }
@@ -137,10 +173,14 @@ pub async fn handle_fetch(
                 })
                 .map(|(key, submission)| {
                     (
-                        key,
-                        FetchedSubmission::Success {
-                            fetch_status: FetchStatus::Cached,
-                            submission,
+                        key.clone(),
+                        FetchedSubmission {
+                            site: key.0,
+                            submission_id: key.1,
+                            submission: FetchedSubmissionData::Success {
+                                fetch_status: FetchStatus::Cached,
+                                submission,
+                            },
                         },
                     )
                 }),
@@ -157,10 +197,33 @@ pub async fn handle_fetch(
     if !needing_load.is_empty() && !matches!(req.policy, FetchPolicy::Never) {
         tracing::info!(len = needing_load.len(), "loading submissions");
 
-        let submissions = sites
-            .as_slice()
-            .load_submissions(&needing_load)
-            .await
+        let task = tokio::spawn(
+            async move {
+                let sites = sites.as_slice();
+                let res = sites.load_submissions(&needing_load).await;
+                tracing::info!("completed submission load");
+                res
+            }
+            .in_current_span(),
+        );
+
+        let submissions = if let Some(timeout) = req.timeout {
+            match tokio::time::timeout(timeout, task).await {
+                Ok(res) => res,
+                Err(_err) => {
+                    tracing::warn!("timeout elapsed");
+                    Ok(Ok(vec![]))
+                }
+            }
+        } else {
+            task.await
+        }
+        .map_err(|err| async_nats::service::error::Error {
+            status: err.to_string(),
+            code: 503,
+        })?;
+
+        let submissions = submissions
             .map_err(|err| async_nats::service::error::Error {
                 status: err.to_string(),
                 code: 503,
@@ -169,9 +232,13 @@ pub async fn handle_fetch(
             .map(|submission| match submission {
                 SubmissionResult::Fetched(submission) => (
                     (submission.site, submission.submission_id.clone()),
-                    FetchedSubmission::Success {
-                        fetch_status: FetchStatus::Fetched,
-                        submission,
+                    FetchedSubmission {
+                        site: submission.site,
+                        submission_id: submission.submission_id.clone(),
+                        submission: FetchedSubmissionData::Success {
+                            fetch_status: FetchStatus::Fetched,
+                            submission,
+                        },
                     },
                 ),
                 SubmissionResult::Error {
@@ -180,10 +247,10 @@ pub async fn handle_fetch(
                     message,
                 } => (
                     (site, submission_id.clone()),
-                    FetchedSubmission::Error {
+                    FetchedSubmission {
                         site,
                         submission_id,
-                        message,
+                        submission: FetchedSubmissionData::Error { message },
                     },
                 ),
             });
@@ -215,10 +282,14 @@ pub async fn handle_fetch(
 
         ready_submissions.extend(submissions.into_iter().map(|(key, submission)| {
             (
-                key,
-                FetchedSubmission::Success {
-                    fetch_status: FetchStatus::Cached,
-                    submission,
+                key.clone(),
+                FetchedSubmission {
+                    site: key.0,
+                    submission_id: key.1,
+                    submission: FetchedSubmissionData::Success {
+                        fetch_status: FetchStatus::Cached,
+                        submission,
+                    },
                 },
             )
         }));
@@ -226,9 +297,13 @@ pub async fn handle_fetch(
 
     for (key, sub) in ready_submissions.iter_mut() {
         match sub {
-            FetchedSubmission::Success {
-                fetch_status: FetchStatus::Fetched,
-                submission,
+            FetchedSubmission {
+                submission:
+                    FetchedSubmissionData::Success {
+                        fetch_status: FetchStatus::Fetched,
+                        submission,
+                    },
+                ..
             } => {
                 if let Err(err) =
                     crate::sites::insert_submission(&pool, &nats, FetchReason::OnDemand, submission)

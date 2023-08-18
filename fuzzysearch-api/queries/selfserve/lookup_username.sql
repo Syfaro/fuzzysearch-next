@@ -1,1 +1,1 @@
-SELECT uuid, registered_at FROM account WHERE lower(email) = lower($1);
+SELECT id, registered_at FROM api.account WHERE lower(username) = lower($1);

@@ -1,1 +1,1 @@
-DELETE FROM session WHERE id = $1;
+DELETE FROM api.session WHERE id = $1;

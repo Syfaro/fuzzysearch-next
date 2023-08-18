@@ -1,9 +1,9 @@
 UPDATE
-    api_key
+    api.key
 SET
-    deleted = true
+    deleted_at = current_timestamp
 WHERE
     id = $1
-    AND user_id = (SELECT id FROM account WHERE uuid = $2)
+    AND account_id = $2
 RETURNING
     name;

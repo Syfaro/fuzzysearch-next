@@ -1,1 +1,1 @@
-SELECT email FROM account WHERE uuid = $1;
+SELECT username FROM api.account WHERE id = $1;

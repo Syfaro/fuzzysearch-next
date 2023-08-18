@@ -24,15 +24,8 @@
                         <tbody>
                             {% for key in api_keys %}
                             <tr>
-                                <th scope="row" class="text-nowrap">
-                                    {% match key.name %}
-                                    {% when Some with (name) %}
-                                    {{ name }}
-                                    {% else %}
-                                    <span class="text-muted">Unnamed</span>
-                                    {% endmatch %}
-                                </th>
-                                <td class="text-nowrap"><code>{{ key.key }}</code></td>
+                                <th scope="row" class="text-nowrap">{{ key.name }}</th>
+                                <td class="text-nowrap"><code>{{ key.token }}</code></td>
                                 <td class="text-end">
                                     <button type="submit" class="btn btn-danger btn-sm" name="key_id"
                                         value="{{ key.id }}">

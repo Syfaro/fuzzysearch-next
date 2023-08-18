@@ -1,7 +1,7 @@
 SELECT
     credential
 FROM
-    webauthn_credential
-    JOIN account ON account.id = webauthn_credential.user_id
+    api.webauthn_credential
+    JOIN api.account ON account.id = webauthn_credential.account_id
 WHERE
-    lower(account.email) = lower($1);
+    lower(account.username) = lower($1);

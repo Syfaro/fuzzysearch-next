@@ -1,30 +1,25 @@
+use std::time::Duration;
+
 use async_compression::tokio::write::GzipEncoder;
 use clap::Parser;
 use serde::Serialize;
+use serde_with::{base64::Base64, serde_as};
 use tokio::io::AsyncWriteExt;
 use tokio_stream::StreamExt;
 
+#[serde_as]
 #[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum Site {
-    FurAffinity,
-    Weasyl,
-    E621,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct Item {
-    site: Site,
-    id: i64,
+struct Item<'a> {
+    site: &'a str,
+    id: &'a str,
     #[serde(with = "artist")]
-    artists: Vec<String>,
+    artists: &'a [String],
     hash: Option<i64>,
     posted_at: Option<chrono::DateTime<chrono::Utc>>,
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(with = "b64_vec")]
-    sha256: Option<Vec<u8>>,
+    #[serde_as(as = "Option<Base64>")]
+    sha256: Option<[u8; 32]>,
     deleted: bool,
-    content_url: Option<String>,
 }
 
 mod artist {
@@ -33,22 +28,6 @@ mod artist {
         S: serde::Serializer,
     {
         serializer.serialize_str(&artists.join(","))
-    }
-}
-
-mod b64_vec {
-    use base64::Engine;
-
-    pub fn serialize<S>(bytes: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match bytes {
-            Some(bytes) => {
-                serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
-            }
-            None => serializer.serialize_none(),
-        }
     }
 }
 
@@ -105,93 +84,39 @@ async fn main() {
             )
             .unwrap(),
     );
+    pb.enable_steady_tick(Duration::from_millis(100));
+    pb.set_message("Exporting Submissions");
 
-    pb.set_message("Exporting FurAffinity");
-
-    let mut rows = sqlx::query_file!("queries/export_furaffinity.sql").fetch(&pool);
-
-    while let Some(row) = rows.try_next().await.expect("could not get row") {
-        if pb.position() + 1 > estimated_count {
-            pb.set_length(pb.position() + 1);
-        }
-
-        dump.serialize(&Item {
-            site: Site::FurAffinity,
-            id: row.id as i64,
-            artists: row.artist_name.map(|name| vec![name]).unwrap_or_default(),
-            hash: row.hash_int,
-            posted_at: row.posted_at,
-            updated_at: row.updated_at,
-            sha256: row.file_sha256,
-            deleted: row.deleted,
-            content_url: row.url,
-        })
-        .await
-        .expect("could not write row");
-
-        pb.inc(1);
-    }
-
-    pb.set_message("Exporting Weasyl");
-
-    let mut rows = sqlx::query_file!("queries/export_weasyl.sql").fetch(&pool);
+    let rows = sqlx::query_file!("queries/export_submission.sql").fetch(&pool);
+    let mut rows = pb.wrap_stream(rows);
 
     while let Some(row) = rows.try_next().await.expect("could not get row") {
-        if pb.position() + 1 > estimated_count {
-            pb.set_length(pb.position() + 1);
+        let artists: Vec<_> = row
+            .artists
+            .map(|artists| artists.0)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|artist| artist.site_artist_id)
+            .collect();
+
+        for media in row.media.map(|media| media.0).unwrap_or_default() {
+            let Some(frame) = media.frames.unwrap_or_default().pop() else {
+                continue;
+            };
+
+            dump.serialize(&Item {
+                site: &row.site,
+                id: &row.site_submission_id,
+                artists: &artists,
+                hash: frame.perceptual_gradient,
+                posted_at: row.posted_at,
+                updated_at: row.retrieved_at,
+                sha256: media.file_sha256,
+                deleted: row.deleted,
+            })
+            .await
+            .expect("could not write row");
         }
-
-        let posted_at = row
-            .posted_at
-            .and_then(|posted_at| chrono::DateTime::parse_from_rfc3339(&posted_at).ok())
-            .map(chrono::DateTime::<chrono::Utc>::from);
-
-        dump.serialize(&Item {
-            site: Site::Weasyl,
-            id: row.id as i64,
-            artists: row.owner.map(|owner| vec![owner]).unwrap_or_default(),
-            hash: row.hash,
-            posted_at,
-            updated_at: None,
-            sha256: row.sha256,
-            deleted: row.deleted,
-            content_url: row.submission,
-        })
-        .await
-        .expect("could not write row");
-
-        pb.inc(1);
-    }
-
-    pb.set_message("Exporting e621");
-
-    let mut rows = sqlx::query_file!("queries/export_e621.sql").fetch(&pool);
-
-    while let Some(row) = rows.try_next().await.expect("could not get row") {
-        if pb.position() + 1 > estimated_count {
-            pb.set_length(pb.position() + 1);
-        }
-
-        let posted_at = row
-            .created_at
-            .and_then(|created_at| chrono::DateTime::parse_from_rfc3339(&created_at).ok())
-            .map(chrono::DateTime::<chrono::Utc>::from);
-
-        dump.serialize(&Item {
-            site: Site::E621,
-            id: row.id as i64,
-            artists: row.artists.unwrap_or_default(),
-            hash: row.hash,
-            posted_at,
-            updated_at: None,
-            sha256: row.sha256,
-            deleted: row.deleted,
-            content_url: row.content_url,
-        })
-        .await
-        .expect("could not write row");
-
-        pb.inc(1);
     }
 
     let mut compressor = dump.into_inner().await.unwrap();

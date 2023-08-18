@@ -66,7 +66,7 @@ pub async fn unleash_context<B>(req: Request<B>, next: Next<B>) -> Result<Respon
         .map(|session| {
             (
                 session.id().to_string(),
-                session.get::<Uuid>("user_id").map(|id| id.to_string()),
+                session.get::<Uuid>("account_id").map(|id| id.to_string()),
             )
         });
 
@@ -80,14 +80,14 @@ pub async fn unleash_context<B>(req: Request<B>, next: Next<B>) -> Result<Respon
         }
     };
 
-    let (session_id, user_id) = match data {
-        Some((session_id, user_id)) => (Some(session_id), user_id),
+    let (session_id, account_id) = match data {
+        Some((session_id, account_id)) => (Some(session_id), account_id),
         None => (None, None),
     };
 
     let context = Context {
         session_id,
-        user_id,
+        user_id: account_id,
         properties: [(
             "appVersion".to_string(),
             env!("CARGO_PKG_VERSION").to_string(),
@@ -176,10 +176,10 @@ where
             .await
             .map_err(eyre::Report::from)?;
 
-        let user_id = session.get("user_id").ok_or(HxError::Unauthorized)?;
-        tracing::info!(%user_id, "found user from request");
+        let account_id = session.get("account_id").ok_or(HxError::Unauthorized)?;
+        tracing::info!(%account_id, "found user from request");
 
-        Ok(Self(user_id))
+        Ok(Self(account_id))
     }
 }
 
@@ -248,13 +248,13 @@ struct ApiKeysTemplate<'a> {
 #[tracing::instrument(skip(pool, alert))]
 async fn api_keys_resp<'a>(
     pool: &PgPool,
-    user_id: Uuid,
+    account_id: Uuid,
     alert: Option<AlertTemplate<'a>>,
 ) -> Result<ApiKeysTemplate<'a>, HxError> {
     let api_keys = sqlx::query_file_as!(
         crate::db::UserApiKey,
         "queries/selfserve/lookup_user_api_keys.sql",
-        user_id
+        account_id
     )
     .fetch_all(pool)
     .await?;
@@ -299,18 +299,18 @@ fn prepare_registration(
     webauthn: &Webauthn,
     resp: &mut Response,
     session: &mut WritableSession,
-    user_id: Uuid,
+    account_id: Uuid,
     username: &str,
 ) -> Result<(), HxError> {
     let (mut ccr, reg_state) =
-        webauthn.start_passkey_registration(user_id, username, username, None)?;
+        webauthn.start_passkey_registration(account_id, username, username, None)?;
     ccr.public_key.authenticator_selection = Some(AuthenticatorSelectionCriteria {
         authenticator_attachment: Some(AuthenticatorAttachment::Platform),
         require_resident_key: false,
         user_verification: UserVerificationPolicy::Required,
     });
 
-    session.insert("user_id", user_id)?;
+    session.insert("account_id", account_id)?;
     session.insert("reg_state", reg_state)?;
 
     let event = serde_json::json!({
@@ -358,9 +358,9 @@ struct IndexTemplate<'a> {
 }
 
 async fn find_username(pool: &PgPool, session: &ReadableSession) -> Option<String> {
-    let user_id: Uuid = session.get("user_id")?;
+    let account_id: Uuid = session.get("account_id")?;
 
-    sqlx::query_file_scalar!("queries/selfserve/lookup_username_by_id.sql", user_id)
+    sqlx::query_file_scalar!("queries/selfserve/lookup_username_by_id.sql", account_id)
         .fetch_optional(pool)
         .await
         .ok()
@@ -446,7 +446,7 @@ async fn auth_form(
             .as_ref()
             .map(|_id| AuthFormState::KnownUsername)
             .unwrap_or(AuthFormState::UnknownUsername);
-        let created_at = user.and_then(|user| user.registered_at.map(|reg_at| (user.uuid, reg_at)));
+        let created_at = user.and_then(|user| user.registered_at.map(|reg_at| (user.id, reg_at)));
 
         (state, created_at)
     };
@@ -482,7 +482,7 @@ fn handle_no_creds(
 ) -> Result<Response, HxError> {
     tracing::warn!("user has no credentials");
 
-    let resp = if let Some((user_id, reg_at)) = created_at {
+    let resp = if let Some((account_id, reg_at)) = created_at {
         tracing::debug!(%reg_at, "found user created at");
 
         if reg_at + chrono::Duration::minutes(5) < chrono::Utc::now() {
@@ -494,7 +494,7 @@ fn handle_no_creds(
             )
             .into_response();
 
-            prepare_registration(webauthn, &mut resp, session, user_id, username)?;
+            prepare_registration(webauthn, &mut resp, session, account_id, username)?;
 
             resp
         } else {
@@ -535,7 +535,7 @@ async fn register_start(
 
     let mut tx = pool.begin().await?;
 
-    let user_id = sqlx::query_file_scalar!("queries/selfserve/insert_account.sql", username)
+    let account_id = sqlx::query_file_scalar!("queries/selfserve/insert_account.sql", username)
         .fetch_one(&mut tx)
         .await?;
 
@@ -545,11 +545,11 @@ async fn register_start(
     )
     .into_response();
 
-    prepare_registration(&webauthn, &mut resp, &mut session, user_id, &username)?;
+    prepare_registration(&webauthn, &mut resp, &mut session, account_id, &username)?;
 
     tx.commit().await?;
 
-    tracing::info!(%user_id, "created new account");
+    tracing::info!(%account_id, "created new account");
 
     Ok(resp)
 }
@@ -563,7 +563,7 @@ struct AuthRegisterFinishForm {
 async fn register_finish(
     Extension(webauthn): Extension<Arc<Webauthn>>,
     Extension(pool): Extension<PgPool>,
-    HxUser(user_id): HxUser,
+    HxUser(account_id): HxUser,
     mut session: WritableSession,
     Form(reg): Form<AuthRegisterFinishForm>,
 ) -> Result<Response, HxError> {
@@ -576,7 +576,7 @@ async fn register_finish(
 
     sqlx::query_file!(
         "queries/selfserve/insert_credential.sql",
-        user_id,
+        account_id,
         cred_id,
         serde_json::to_value(auth_result)?
     )
@@ -587,7 +587,7 @@ async fn register_finish(
 
     tracing::info!("finished registering user");
 
-    Ok(api_keys_resp(&pool, user_id, None).await.into_response())
+    Ok(api_keys_resp(&pool, account_id, None).await.into_response())
 }
 
 async fn login_start(
@@ -654,17 +654,17 @@ async fn login_finish(
         ));
     };
 
-    let user_id = sqlx::query_file_scalar!(
+    let account_id = sqlx::query_file_scalar!(
         "queries/selfserve/lookup_user_by_credential.sql",
         auth_result.cred_id().0
     )
     .fetch_one(&pool)
     .await?;
 
-    session.insert("user_id", user_id)?;
-    tracing::info!(%user_id, "finished signing in user");
+    session.insert("account_id", account_id)?;
+    tracing::info!(%account_id, "finished signing in user");
 
-    Ok(api_keys_resp(&pool, user_id, None).await.into_response())
+    Ok(api_keys_resp(&pool, account_id, None).await.into_response())
 }
 
 struct HxPrompt(String);
@@ -710,10 +710,10 @@ where
 #[tracing::instrument(err, skip_all)]
 async fn key_create(
     Extension(pool): Extension<PgPool>,
-    HxUser(user_id): HxUser,
+    HxUser(account_id): HxUser,
     prompt: Option<HxPrompt>,
 ) -> Result<Response, HxError> {
-    let count = sqlx::query_file_scalar!("queries/selfserve/count_user_api_keys.sql", user_id)
+    let count = sqlx::query_file_scalar!("queries/selfserve/count_user_api_keys.sql", account_id)
         .fetch_optional(&pool)
         .await?
         .unwrap_or_default()
@@ -722,7 +722,7 @@ async fn key_create(
     if count >= KEY_COUNT_MAXIMUM as i64 {
         return Ok(api_keys_resp(
             &pool,
-            user_id,
+            account_id,
             Some(AlertTemplate::new(
                 "Too many existing API keys.",
                 "alert alert-danger",
@@ -740,22 +740,26 @@ async fn key_create(
                 .take(KEY_NAME_MAX_LENGTH)
                 .collect::<String>()
         })
-        .filter(|s| !s.is_empty());
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unnamed".to_string());
 
     let key = rand::distributions::Alphanumeric.sample_string(&mut rand::thread_rng(), KEY_LENGTH);
     let key = format!("fzs1-{key}");
 
-    sqlx::query_file!("queries/selfserve/insert_api_key.sql", user_id, name, key)
-        .execute(&pool)
-        .await?;
-
-    let name = name.as_deref().unwrap_or("unnamed");
+    sqlx::query_file!(
+        "queries/selfserve/insert_api_key.sql",
+        account_id,
+        name,
+        key
+    )
+    .execute(&pool)
+    .await?;
 
     tracing::info!(name, count = count + 1, "created new api key");
 
     let resp = api_keys_resp(
         &pool,
-        user_id,
+        account_id,
         Some(AlertTemplate::new(
             format!("Created API key {name}."),
             "alert alert-success",
@@ -768,27 +772,28 @@ async fn key_create(
 
 #[derive(Deserialize)]
 struct KeyDeleteForm {
-    key_id: i32,
+    key_id: Uuid,
 }
 
 #[tracing::instrument(err, skip_all)]
 async fn key_delete(
     Extension(pool): Extension<PgPool>,
-    HxUser(user_id): HxUser,
+    HxUser(account_id): HxUser,
     Form(form): Form<KeyDeleteForm>,
 ) -> Result<Response, HxError> {
-    let name =
-        sqlx::query_file_scalar!("queries/selfserve/delete_api_key.sql", form.key_id, user_id)
-            .fetch_one(&pool)
-            .await?;
-
-    let name = name.as_deref().unwrap_or("unnamed");
+    let name = sqlx::query_file_scalar!(
+        "queries/selfserve/delete_api_key.sql",
+        form.key_id,
+        account_id
+    )
+    .fetch_one(&pool)
+    .await?;
 
     tracing::info!(name, "deleted api key");
 
     let resp = api_keys_resp(
         &pool,
-        user_id,
+        account_id,
         Some(AlertTemplate::new(
             format!("Deleted API key {name}."),
             "alert alert-success",

@@ -1,12 +1,12 @@
 {
   "db": "PostgreSQL",
-  "11f97073ccd1875964bb104a812b5671049fcbea6f3bd741444583f6e413343b": {
+  "152ad46991ddb5719cf33c05a56dab2e5d79dd923b180088a9a10b40f551bc22": {
     "describe": {
       "columns": [
         {
-          "name": "credential",
+          "name": "username",
           "ordinal": 0,
-          "type_info": "Jsonb"
+          "type_info": "Text"
         }
       ],
       "nullable": [
@@ -14,17 +14,147 @@
       ],
       "parameters": {
         "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "SELECT username FROM api.account WHERE id = $1;\n"
+  },
+  "1b4a4bad98f8468110db4c8feb0dd362d81d0b631645174df2d9388cb58f7069": {
+    "describe": {
+      "columns": [
+        {
+          "name": "data",
+          "ordinal": 0,
+          "type_info": "Jsonb"
+        }
+      ],
+      "nullable": [
+        true
+      ],
+      "parameters": {
+        "Left": [
           "Text"
         ]
       }
     },
-    "query": "SELECT\n    credential\nFROM\n    webauthn_credential\n    JOIN account ON account.id = webauthn_credential.user_id\nWHERE\n    lower(account.email) = lower($1);\n"
+    "query": "SELECT\n    data\nFROM\n    api.session\nWHERE\n    id = $1\n    AND (\n        expires_at IS NULL\n        OR expires_at > current_timestamp\n    );\n"
   },
-  "14b869a096455ac0b352e60715118fa77fdae06d99d9e6d23ff2ea4b6164f88e": {
+  "4bb7283010fced13ea782c734de941b57a7211a67bb044713ec8b743639c011d": {
     "describe": {
       "columns": [
         {
-          "name": "uuid",
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        },
+        {
+          "name": "account_id",
+          "ordinal": 1,
+          "type_info": "Uuid"
+        },
+        {
+          "name": "token",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "name",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "name_limit",
+          "ordinal": 4,
+          "type_info": "Int4"
+        },
+        {
+          "name": "image_limit",
+          "ordinal": 5,
+          "type_info": "Int4"
+        },
+        {
+          "name": "hash_limit",
+          "ordinal": 6,
+          "type_info": "Int4"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "SELECT\n    key.id,\n    account_id,\n    token,\n    name,\n    name_limit,\n    image_limit,\n    hash_limit\nFROM\n    api.key\n    JOIN api.account ON account.id = key.account_id\nWHERE\n    account.id = $1\n    AND deleted_at IS NULL\nORDER BY\n    key.id;\n"
+  },
+  "538edf0a2ea5081d73fdf50d1ae5ce79a41f78bac285a690759a7df04bc5f6ff": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Timestamptz",
+          "Jsonb"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    api.session (id, expires_at, data)\nVALUES\n    ($1, $2, $3) ON CONFLICT (id) DO\nUPDATE\nSET\n    expires_at = EXCLUDED.expires_at,\n    data = EXCLUDED.data;\n"
+  },
+  "7893263d635bc047b7b5ccd0698188491091741ac3dc1599d9493e9f209804b5": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Uuid"
+        },
+        {
+          "name": "credential",
+          "ordinal": 1,
+          "type_info": "Jsonb"
+        }
+      ],
+      "nullable": [
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Bytea"
+        ]
+      }
+    },
+    "query": "SELECT\n    account.id,\n    webauthn_credential.credential\nFROM\n    api.webauthn_credential\n    JOIN api.account ON account.id = webauthn_credential.account_id\nWHERE\n    webauthn_credential.id = $1;\n"
+  },
+  "7bc8b156205a5570ea9423a38fe74cef0945ab6d6364a391d2c71d04ebde2479": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Uuid",
+          "Text",
+          "Text"
+        ]
+      }
+    },
+    "query": "INSERT INTO\n    api.key (\n        account_id,\n        name,\n        token,\n        name_limit,\n        image_limit,\n        hash_limit\n    )\nVALUES\n    ($1, $2, $3, 60, 60, 30);\n"
+  },
+  "7c8504090859e5bcd15db8a2ceb49352ca112a91b23d4b92e6195c8918d750ad": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
           "ordinal": 0,
           "type_info": "Uuid"
         }
@@ -38,87 +168,13 @@
         ]
       }
     },
-    "query": "SELECT\n    account.uuid\nFROM\n    webauthn_credential\n    JOIN account ON account.id = webauthn_credential.user_id\nWHERE\n    credential_id = $1;\n"
+    "query": "SELECT\n    account.id\nFROM\n    api.webauthn_credential\n    JOIN api.account ON account.id = webauthn_credential.account_id\nWHERE\n    webauthn_credential.id = $1;\n"
   },
-  "1f8ab11713fafb376d51e8077e3f626347c54723aef7e0d022549fec1c2e9bad": {
-    "describe": {
-      "columns": [
-        {
-          "name": "url",
-          "ordinal": 0,
-          "type_info": "Text"
-        }
-      ],
-      "nullable": [
-        false
-      ],
-      "parameters": {
-        "Left": []
-      }
-    },
-    "query": "SELECT\n    url\nFROM\n    dump\nORDER BY\n    created_at DESC\nLIMIT\n    1;\n"
-  },
-  "21398ee81bb888a8d312b533538866508c83a7a587921f92198269456b3ab4cc": {
+  "86a04a53cbdb700b651308497de571a223354675024d43d973e71a6122c4482a": {
     "describe": {
       "columns": [
         {
           "name": "id",
-          "ordinal": 0,
-          "type_info": "Int4"
-        },
-        {
-          "name": "user_id",
-          "ordinal": 1,
-          "type_info": "Int4"
-        },
-        {
-          "name": "key",
-          "ordinal": 2,
-          "type_info": "Text"
-        },
-        {
-          "name": "name",
-          "ordinal": 3,
-          "type_info": "Text"
-        },
-        {
-          "name": "name_limit",
-          "ordinal": 4,
-          "type_info": "Int2"
-        },
-        {
-          "name": "image_limit",
-          "ordinal": 5,
-          "type_info": "Int2"
-        },
-        {
-          "name": "hash_limit",
-          "ordinal": 6,
-          "type_info": "Int2"
-        }
-      ],
-      "nullable": [
-        false,
-        false,
-        false,
-        true,
-        false,
-        false,
-        false
-      ],
-      "parameters": {
-        "Left": [
-          "Uuid"
-        ]
-      }
-    },
-    "query": "SELECT\n    api_key.id,\n    user_id,\n    key,\n    name,\n    name_limit,\n    image_limit,\n    hash_limit\nFROM\n    api_key\n    JOIN account ON account.id = api_key.user_id\nWHERE\n    account.uuid = $1\n    AND deleted = false\nORDER BY\n    api_key.id ASC;\n"
-  },
-  "2e23660532d6e970c9f0aac740a7d1ba6effcd0f77367a1caf9cc41b44da0d61": {
-    "describe": {
-      "columns": [
-        {
-          "name": "uuid",
           "ordinal": 0,
           "type_info": "Uuid"
         },
@@ -138,143 +194,7 @@
         ]
       }
     },
-    "query": "SELECT uuid, registered_at FROM account WHERE lower(email) = lower($1);\n"
-  },
-  "368f171580317f4eef8fcabd7e291ba23993e91adbf566e4d996b145274956f2": {
-    "describe": {
-      "columns": [
-        {
-          "name": "data",
-          "ordinal": 0,
-          "type_info": "Jsonb"
-        }
-      ],
-      "nullable": [
-        true
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      }
-    },
-    "query": "SELECT\n    data\nFROM\n    session\nWHERE\n    id = $1\n    AND (\n        expires_at IS NULL\n        OR expires_at > current_timestamp\n    );\n"
-  },
-  "4824e358f86fbcfbef054b91e1e1f4a9b7cf10c8e1a994e8ba639e4a12fa4539": {
-    "describe": {
-      "columns": [
-        {
-          "name": "id",
-          "ordinal": 0,
-          "type_info": "Int4"
-        },
-        {
-          "name": "user_id",
-          "ordinal": 1,
-          "type_info": "Int4"
-        },
-        {
-          "name": "key",
-          "ordinal": 2,
-          "type_info": "Text"
-        },
-        {
-          "name": "name",
-          "ordinal": 3,
-          "type_info": "Text"
-        },
-        {
-          "name": "name_limit",
-          "ordinal": 4,
-          "type_info": "Int2"
-        },
-        {
-          "name": "image_limit",
-          "ordinal": 5,
-          "type_info": "Int2"
-        },
-        {
-          "name": "hash_limit",
-          "ordinal": 6,
-          "type_info": "Int2"
-        }
-      ],
-      "nullable": [
-        false,
-        false,
-        false,
-        true,
-        false,
-        false,
-        false
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      }
-    },
-    "query": "SELECT id, user_id, key, name, name_limit, image_limit, hash_limit FROM api_key WHERE key = $1;\n"
-  },
-  "5520e2be5d6e33f92019b4d73b832fbd29cb371ae23a1e853f9add05935d292f": {
-    "describe": {
-      "columns": [
-        {
-          "name": "uuid",
-          "ordinal": 0,
-          "type_info": "Uuid"
-        },
-        {
-          "name": "credential",
-          "ordinal": 1,
-          "type_info": "Jsonb"
-        }
-      ],
-      "nullable": [
-        false,
-        false
-      ],
-      "parameters": {
-        "Left": [
-          "Bytea"
-        ]
-      }
-    },
-    "query": "SELECT\n    account.uuid,\n    webauthn_credential.credential\nFROM\n    webauthn_credential\n    JOIN account ON account.id = webauthn_credential.user_id\nWHERE\n    credential_id = $1;\n"
-  },
-  "60d765c096b5b8d9f1e7e51dd3d04dda95814796a08832554c81332388b0ef08": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Left": [
-          "Text",
-          "Timestamptz",
-          "Jsonb"
-        ]
-      }
-    },
-    "query": "INSERT INTO\n    session (id, expires_at, data)\nVALUES\n    ($1, $2, $3) ON CONFLICT (id) DO\nUPDATE\nSET\n    expires_at = EXCLUDED.expires_at,\n    data = EXCLUDED.data;\n"
-  },
-  "6f7e2f045cad26b8312cb23c562c421ef7e642d998c24ab7304d3f0c6dec84d7": {
-    "describe": {
-      "columns": [
-        {
-          "name": "exists",
-          "ordinal": 0,
-          "type_info": "Bool"
-        }
-      ],
-      "nullable": [
-        null
-      ],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      }
-    },
-    "query": "SELECT exists(\n    SELECT 1 FROM twitter_user WHERE lower(data->>'screen_name') = lower($1));\n"
+    "query": "SELECT id, registered_at FROM api.account WHERE lower(username) = lower($1);\n"
   },
   "8f00059cc16cef282c78da7afd7fdc70b6a5621f74bf4d4e52d0e48ba6ecf44d": {
     "describe": {
@@ -286,89 +206,17 @@
     },
     "query": "TRUNCATE TABLE session;\n"
   },
-  "950cac871f25a689bf827e541d517a92c4f572f3db4ea8881fcc07e3b43054fb": {
+  "9cdcee3a19219425081c8438dce9bca990704ffafed1610dcaac3549769b7c9c": {
     "describe": {
       "columns": [
         {
-          "name": "id",
+          "name": "credential",
           "ordinal": 0,
-          "type_info": "Int4"
-        },
-        {
-          "name": "file_id",
-          "ordinal": 1,
-          "type_info": "Int4"
-        },
-        {
-          "name": "artist?",
-          "ordinal": 2,
-          "type_info": "Text"
-        },
-        {
-          "name": "hash",
-          "ordinal": 3,
-          "type_info": "Int8"
-        },
-        {
-          "name": "url",
-          "ordinal": 4,
-          "type_info": "Text"
-        },
-        {
-          "name": "filename",
-          "ordinal": 5,
-          "type_info": "Text"
-        },
-        {
-          "name": "rating",
-          "ordinal": 6,
-          "type_info": "Bpchar"
-        },
-        {
-          "name": "posted_at",
-          "ordinal": 7,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "file_size",
-          "ordinal": 8,
-          "type_info": "Int4"
-        },
-        {
-          "name": "sha256",
-          "ordinal": 9,
-          "type_info": "Bytea"
-        },
-        {
-          "name": "updated_at",
-          "ordinal": 10,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "deleted",
-          "ordinal": 11,
-          "type_info": "Bool"
-        },
-        {
-          "name": "tags",
-          "ordinal": 12,
-          "type_info": "TextArray"
+          "type_info": "Jsonb"
         }
       ],
       "nullable": [
-        false,
-        true,
-        false,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        false,
-        null
+        false
       ],
       "parameters": {
         "Left": [
@@ -376,23 +224,87 @@
         ]
       }
     },
-    "query": "SELECT\n    submission.id,\n    file_id,\n    artist.name \"artist?\",\n    submission.hash_int hash,\n    submission.url,\n    submission.filename,\n    submission.rating,\n    submission.posted_at,\n    submission.file_size,\n    submission.file_sha256 \"sha256\",\n    submission.updated_at,\n    submission.deleted,\n    ARRAY(\n        SELECT\n            tag.name\n        FROM\n            tag_to_post\n            JOIN tag ON tag.id = tag_to_post.tag_id\n        WHERE\n            tag_to_post.post_id = submission.id\n    ) tags\nFROM\n    submission\n    LEFT JOIN artist ON artist.id = submission.artist_id\nWHERE\n    lower(submission.filename) = lower($1);\n"
+    "query": "SELECT\n    credential\nFROM\n    api.webauthn_credential\n    JOIN api.account ON account.id = webauthn_credential.account_id\nWHERE\n    lower(account.username) = lower($1);\n"
   },
-  "9abc9bbd1016e3977abdb6c3428f3c81b6a1107318e2654ed80699e094e62d9d": {
+  "b09b957386ed3641e5bbb5a1deb95541b9edb90a7406ca8c6abe795235b98be1": {
+    "describe": {
+      "columns": [
+        {
+          "name": "count",
+          "ordinal": 0,
+          "type_info": "Int8"
+        }
+      ],
+      "nullable": [
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      }
+    },
+    "query": "SELECT\n    count(*)\nFROM\n    api.key\nWHERE\n    account_id = $1\n    AND deleted_at IS NULL;\n"
+  },
+  "b354da881459a419ff001b850802b31b35b53ec729821fcd52f969ecf6fd0c5d": {
     "describe": {
       "columns": [],
       "nullable": [],
       "parameters": {
-        "Left": []
+        "Left": [
+          "Text"
+        ]
       }
     },
-    "query": "DELETE FROM session WHERE expires_at < current_timestamp;\n"
+    "query": "DELETE FROM api.session WHERE id = $1;\n"
   },
-  "a3718b1a1f5e714a01449957a2da0edff48915d4a01078ea619b5d4846aee8a7": {
+  "b7980691ca115020173cb5660e488981e487884a1060e4e177c787b86b81b01d": {
     "describe": {
       "columns": [
         {
-          "name": "email",
+          "name": "group_name",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "count",
+          "ordinal": 1,
+          "type_info": "Int4"
+        }
+      ],
+      "nullable": [
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid",
+          "Int8",
+          "Json"
+        ]
+      }
+    },
+    "query": "WITH requested_bucket AS (\n\tSELECT * FROM json_to_recordset($3::json)\n\t\tAS requested_bucket (bucket text, count integer)\n)\nINSERT INTO api.rate_limit (key_id, time_window, group_name, count)\n\tSELECT $1, $2, requested_bucket.bucket, requested_bucket.count FROM requested_bucket\n\tON CONFLICT ON CONSTRAINT unique_window DO UPDATE SET count = rate_limit.count + EXCLUDED.count\n\tRETURNING rate_limit.group_name, rate_limit.count;\n"
+  },
+  "b918bb9a13448395975cf89439e2652500bfe2b2024639ca6c713f54fad1ad12": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Uuid",
+          "Bytea",
+          "Jsonb"
+        ]
+      }
+    },
+    "query": "INSERT INTO api.webauthn_credential\n    (id, account_id, credential)\nVALUES\n    ($2, $1, $3);\n"
+  },
+  "d53943e9b9dd2de797a5189edbed74657de0f36aad0f79e1a21b8f39e2ad4f6b": {
+    "describe": {
+      "columns": [
+        {
+          "name": "name",
           "ordinal": 0,
           "type_info": "Text"
         }
@@ -402,17 +314,46 @@
       ],
       "parameters": {
         "Left": [
+          "Uuid",
           "Uuid"
         ]
       }
     },
-    "query": "SELECT email FROM account WHERE uuid = $1;\n"
+    "query": "UPDATE\n    api.key\nSET\n    deleted_at = current_timestamp\nWHERE\n    id = $1\n    AND account_id = $2\nRETURNING\n    name;\n"
   },
-  "a624a8647c2798c245ebd2570de36ec548014bdc2680626e0e0b34cf8a7ed351": {
+  "dfc96998b770ae9333c6cc964886a22fc63176725cf4be7083a9ffd24316e70e": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "DELETE FROM api.session WHERE expires_at < current_timestamp;\n"
+  },
+  "e182a0ff4e44200c51aae2879d5dd8a3fcf9e019ed01642ed4011c4140850100": {
     "describe": {
       "columns": [
         {
-          "name": "uuid",
+          "name": "url",
+          "ordinal": 0,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "SELECT\n    url\nFROM\n    api.dump\nORDER BY\n    created_at DESC\nLIMIT\n    1;\n"
+  },
+  "e1f67ac10c6f0e403f421f174147fba42da062317112abf870d96cb61b0296a7": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
           "ordinal": 0,
           "type_info": "Uuid"
         }
@@ -426,207 +367,62 @@
         ]
       }
     },
-    "query": "INSERT INTO\n    account (email, password)\nVALUES\n    ($1, 0) RETURNING uuid;\n"
+    "query": "INSERT INTO\n    api.account (username)\nVALUES\n    ($1) RETURNING id;\n"
   },
-  "abf7bd1f09c7faadba9e393fae43ba97c08b398a74402a96160852ba7c43e084": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Left": [
-          "Text"
-        ]
-      }
-    },
-    "query": "DELETE FROM session WHERE id = $1;\n"
-  },
-  "ba09ca7c657aadfafd967c55d26625b4d4ab1affe13b69dbafbf37c2c507df75": {
+  "f32e8df3c4cb28dc20e3c198bd7a6c0ed00ce89c7d8ad0b3932a1d3712c46151": {
     "describe": {
       "columns": [
         {
           "name": "id",
           "ordinal": 0,
-          "type_info": "Int4"
+          "type_info": "Uuid"
         },
         {
-          "name": "file_id",
+          "name": "account_id",
           "ordinal": 1,
-          "type_info": "Int4"
+          "type_info": "Uuid"
         },
         {
-          "name": "artist?",
+          "name": "token",
           "ordinal": 2,
           "type_info": "Text"
         },
         {
-          "name": "hash",
+          "name": "name",
           "ordinal": 3,
-          "type_info": "Int8"
+          "type_info": "Text"
         },
         {
-          "name": "url",
+          "name": "name_limit",
           "ordinal": 4,
-          "type_info": "Text"
-        },
-        {
-          "name": "filename",
-          "ordinal": 5,
-          "type_info": "Text"
-        },
-        {
-          "name": "rating",
-          "ordinal": 6,
-          "type_info": "Bpchar"
-        },
-        {
-          "name": "posted_at",
-          "ordinal": 7,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "file_size",
-          "ordinal": 8,
           "type_info": "Int4"
         },
         {
-          "name": "sha256",
-          "ordinal": 9,
-          "type_info": "Bytea"
+          "name": "image_limit",
+          "ordinal": 5,
+          "type_info": "Int4"
         },
         {
-          "name": "updated_at",
-          "ordinal": 10,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "deleted",
-          "ordinal": 11,
-          "type_info": "Bool"
-        },
-        {
-          "name": "tags",
-          "ordinal": 12,
-          "type_info": "TextArray"
+          "name": "hash_limit",
+          "ordinal": 6,
+          "type_info": "Int4"
         }
       ],
       "nullable": [
         false,
-        true,
         false,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
         false,
-        null
-      ],
-      "parameters": {
-        "Left": [
-          "Int4"
-        ]
-      }
-    },
-    "query": "SELECT\n    submission.id,\n    file_id,\n    artist.name \"artist?\",\n    submission.hash_int hash,\n    submission.url,\n    submission.filename,\n    submission.rating,\n    submission.posted_at,\n    submission.file_size,\n    submission.file_sha256 \"sha256\",\n    submission.updated_at,\n    submission.deleted,\n    ARRAY(\n        SELECT\n            tag.name\n        FROM\n            tag_to_post\n            JOIN tag ON tag.id = tag_to_post.tag_id\n        WHERE\n            tag_to_post.post_id = submission.id\n    ) tags\nFROM submission\nLEFT JOIN artist\n    ON artist.id = submission.artist_id\nWHERE\n    submission.id = $1\n    OR submission.file_id = $1;\n"
-  },
-  "c3de3c5829cc7706d36236bdbf3c5ed7278b75ef39acfdd90916dc65817723f1": {
-    "describe": {
-      "columns": [
-        {
-          "name": "name",
-          "ordinal": 0,
-          "type_info": "Text"
-        }
-      ],
-      "nullable": [
-        true
-      ],
-      "parameters": {
-        "Left": [
-          "Int4",
-          "Uuid"
-        ]
-      }
-    },
-    "query": "UPDATE\n    api_key\nSET\n    deleted = true\nWHERE\n    id = $1\n    AND user_id = (SELECT id FROM account WHERE uuid = $2)\nRETURNING\n    name;\n"
-  },
-  "d7f4d2ff686f2409b357eb6824436adcd0725cfea3041e553de67519379bb2c3": {
-    "describe": {
-      "columns": [
-        {
-          "name": "count",
-          "ordinal": 0,
-          "type_info": "Int8"
-        }
-      ],
-      "nullable": [
-        null
-      ],
-      "parameters": {
-        "Left": [
-          "Uuid"
-        ]
-      }
-    },
-    "query": "SELECT\n    count(*)\nFROM\n    api_key\n    JOIN account ON account.id = api_key.user_id\nWHERE\n    account.uuid = $1\n    AND deleted = false;\n"
-  },
-  "e970f8f28759679afcfc963c26b577e3dab219b3d190b594a63ebfbcbb078763": {
-    "describe": {
-      "columns": [
-        {
-          "name": "group_name",
-          "ordinal": 0,
-          "type_info": "Text"
-        },
-        {
-          "name": "count",
-          "ordinal": 1,
-          "type_info": "Int2"
-        }
-      ],
-      "nullable": [
+        false,
+        false,
         false,
         false
       ],
       "parameters": {
         "Left": [
-          "Int4",
-          "Int8",
-          "Json"
-        ]
-      }
-    },
-    "query": "WITH requested_bucket AS (\n\tSELECT * FROM json_to_recordset($3::json)\n\t\tAS requested_bucket (bucket text, count integer)\n)\nINSERT INTO rate_limit (api_key_id, time_window, group_name, count)\n\tSELECT $1, $2, requested_bucket.bucket, requested_bucket.count FROM requested_bucket\n\tON CONFLICT ON CONSTRAINT unique_window DO UPDATE SET count = rate_limit.count + EXCLUDED.count\n\tRETURNING rate_limit.group_name, rate_limit.count;\n"
-  },
-  "f676c63132d921be85231350dd740e70f0b1b92b3fa65b590710a880997bf754": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Left": [
-          "Uuid",
-          "Text",
           "Text"
         ]
       }
     },
-    "query": "INSERT INTO\n    api_key (\n        user_id,\n        name,\n        key,\n        name_limit,\n        image_limit,\n        hash_limit\n    )\nVALUES\n    ((SELECT id FROM account WHERE uuid = $1), $2, $3, 60, 60, 30);\n"
-  },
-  "fb36820d5c1704ee286af85e78c6eac17297f0a9587a876c2902fd7c074a68a0": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Left": [
-          "Uuid",
-          "Bytea",
-          "Jsonb"
-        ]
-      }
-    },
-    "query": "INSERT INTO webauthn_credential\n    (credential_id, user_id, credential)\nVALUES\n    ($2, (SELECT id FROM account WHERE uuid = $1), $3);\n"
+    "query": "SELECT id, account_id, token, name, name_limit, image_limit, hash_limit FROM api.key WHERE token = $1;\n"
   }
 }

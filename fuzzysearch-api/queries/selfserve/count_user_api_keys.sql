@@ -1,8 +1,7 @@
 SELECT
     count(*)
 FROM
-    api_key
-    JOIN account ON account.id = api_key.user_id
+    api.key
 WHERE
-    account.uuid = $1
-    AND deleted = false;
+    account_id = $1
+    AND deleted_at IS NULL;

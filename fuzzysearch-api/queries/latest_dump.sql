@@ -1,7 +1,7 @@
 SELECT
     url
 FROM
-    dump
+    api.dump
 ORDER BY
     created_at DESC
 LIMIT

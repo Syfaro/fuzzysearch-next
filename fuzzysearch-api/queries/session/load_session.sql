@@ -1,7 +1,7 @@
 SELECT
     data
 FROM
-    session
+    api.session
 WHERE
     id = $1
     AND (

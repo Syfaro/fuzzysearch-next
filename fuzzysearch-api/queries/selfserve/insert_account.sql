@@ -1,4 +1,4 @@
 INSERT INTO
-    account (email, password)
+    api.account (username)
 VALUES
-    ($1, 0) RETURNING uuid;
+    ($1) RETURNING id;

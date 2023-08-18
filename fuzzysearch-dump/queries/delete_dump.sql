@@ -1,4 +1,4 @@
 DELETE FROM
-    dump
+    api.dump
 WHERE
     url = $1;

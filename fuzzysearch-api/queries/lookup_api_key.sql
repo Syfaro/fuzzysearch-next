@@ -1,1 +1,1 @@
-SELECT id, user_id, key, name, name_limit, image_limit, hash_limit FROM api_key WHERE key = $1;
+SELECT id, account_id, token, name, name_limit, image_limit, hash_limit FROM api.key WHERE token = $1;

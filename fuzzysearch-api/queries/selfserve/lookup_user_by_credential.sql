@@ -1,7 +1,7 @@
 SELECT
-    account.uuid
+    account.id
 FROM
-    webauthn_credential
-    JOIN account ON account.id = webauthn_credential.user_id
+    api.webauthn_credential
+    JOIN api.account ON account.id = webauthn_credential.account_id
 WHERE
-    credential_id = $1;
+    webauthn_credential.id = $1;

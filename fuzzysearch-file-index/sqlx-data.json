@@ -10,6 +10,18 @@
     },
     "query": "INSERT INTO\n    file_association\nSELECT\n    download_history.hash,\n    download_history.site_id,\n    download_history.submission_id,\n    download_history.posted_at\nFROM\n    download_history\n    JOIN file ON file.hash = download_history.hash\n    LEFT JOIN file_association ON download_history.site_id = file_association.site_id\n    AND download_history.submission_id::text = file_association.submission_id\nWHERE\n    file_association.submission_id IS NULL ON CONFLICT DO nothing;\n"
   },
+  "316a05fc0b4839908cd814301f94f1c4a8a28c12770bc23f25c39aba4ac3b69c": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Json"
+        ]
+      }
+    },
+    "query": "INSERT INTO file (hash, size, height, width, mime_type, metadata_version, exif_entries, perceptual_gradient)\n    SELECT decode(item.hash, 'hex'), size, height, width, mime_type, metadata_version, exif_entries, perceptual_gradient\n        FROM json_to_recordset($1::json) AS item(hash text, size integer, height integer, width integer, mime_type text, metadata_version integer, exif_entries jsonb, perceptual_gradient bigint)\n    ON CONFLICT (hash) DO UPDATE SET\n        size = EXCLUDED.size,\n        height = EXCLUDED.height,\n        width = EXCLUDED.width,\n        mime_type = EXCLUDED.mime_type,\n        metadata_version = EXCLUDED.metadata_version,\n        exif_entries = EXCLUDED.exif_entries,\n        perceptual_gradient = EXCLUDED.perceptual_gradient;\n"
+  },
   "424fb482efcd69fa8fa06ba0dcbff80353cd0c4c50e577f08303fdd09e4e0b61": {
     "describe": {
       "columns": [],
@@ -89,18 +101,6 @@
       }
     },
     "query": "INSERT INTO\n    download_history (\n        site_id,\n        submission_id,\n        posted_at,\n        url,\n        successful,\n        hash\n    )\nVALUES\n    ($1, $2, $3, $4, true, decode($5, 'hex'));\n"
-  },
-  "b2f83f0e942d45f4864753f76128cdbb59a72c780cc4593dc131b1cd9bc95b4a": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Left": [
-          "Json"
-        ]
-      }
-    },
-    "query": "INSERT INTO file (hash, size, height, width, mime_type, metadata_version, exif_entries)\n    SELECT decode(item.hash, 'hex'), size, height, width, mime_type, metadata_version, exif_entries\n        FROM json_to_recordset($1::json) AS item(hash text, size integer, height integer, width integer, mime_type text, metadata_version integer, exif_entries jsonb)\n    ON CONFLICT (hash) DO UPDATE SET\n        size = EXCLUDED.size,\n        height = EXCLUDED.height,\n        width = EXCLUDED.width,\n        mime_type = EXCLUDED.mime_type,\n        metadata_version = EXCLUDED.metadata_version,\n        exif_entries = EXCLUDED.exif_entries;\n"
   },
   "bbff90f7a9cb465c032dab76c1981febf24f1af73459fbcdfb0c4f3d43b8affa": {
     "describe": {

@@ -1,4 +1,4 @@
 INSERT INTO
-    dump (url)
+    api.dump (url)
 VALUES
     ($1);

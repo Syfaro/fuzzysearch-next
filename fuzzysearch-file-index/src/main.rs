@@ -35,7 +35,7 @@ lazy_static! {
     .unwrap();
 }
 
-const METADATA_VERSION: i32 = 2;
+const METADATA_VERSION: i32 = 3;
 
 #[derive(Debug, Parser)]
 struct Config {
@@ -384,6 +384,7 @@ struct File {
     width: Option<i32>,
     mime_type: Option<String>,
     exif_entries: Option<Vec<ExifEntry>>,
+    perceptual_gradient: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -395,6 +396,7 @@ struct DbFile {
     mime_type: Option<String>,
     metadata_version: i32,
     exif_entries: Option<serde_json::Value>,
+    perceptual_gradient: Option<i64>,
 }
 
 async fn process_chunk(pool: PgPool, paths: Vec<PathBuf>) -> eyre::Result<Vec<File>> {
@@ -507,6 +509,7 @@ async fn process_files(
                             exif_entries: file
                                 .exif_entries
                                 .and_then(|entries| serde_json::to_value(entries).ok()),
+                            perceptual_gradient: file.perceptual_gradient,
                         },
                     )
                 })
@@ -548,14 +551,29 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
     let digest = Sha256::digest(&contents);
     let mime_type = infer::get(&contents).map(|inf| inf.mime_type().to_string());
 
-    let (width, height) = std::panic::catch_unwind(|| {
-        image::load_from_memory(&contents)
-            .ok()
-            .map(|im| im.dimensions())
-            .map(|dim| (Some(dim.0 as i32), Some(dim.1 as i32)))
-            .unwrap_or_default()
-    })
-    .map_err(|_err| eyre::eyre!("decoding image panicked"))?;
+    let image = tokio::task::spawn_blocking(move || image::load_from_memory(&contents).ok())
+        .await
+        .map_err(|_err| eyre::eyre!("decoding image panicked"))?;
+
+    let (width, height, perceptual_gradient) = if let Some(image) = image {
+        let (width, height) = image.dimensions();
+
+        let hasher = img_hash::HasherConfig::with_bytes_type::<[u8; 8]>()
+            .hash_alg(img_hash::HashAlg::Gradient)
+            .hash_size(8, 8)
+            .preproc_dct()
+            .to_hasher();
+
+        let perceptual_gradient: [u8; 8] = hasher.hash_image(&image).as_bytes().try_into().unwrap();
+
+        (
+            Some(width as i32),
+            Some(height as i32),
+            Some(i64::from_be_bytes(perceptual_gradient)),
+        )
+    } else {
+        (None, None, None)
+    };
 
     let exif_entries: Option<Vec<_>> = tokio::task::spawn_blocking(move || {
         let mut file = std::io::BufReader::new(std::fs::File::open(path).unwrap());
@@ -582,6 +600,7 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
         height,
         width,
         exif_entries,
+        perceptual_gradient,
     })
 }
 
