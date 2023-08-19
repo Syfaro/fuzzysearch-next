@@ -120,7 +120,7 @@ pub async fn handle_fetch(
                 })?
                 .into_iter()
                 .flat_map(|row| {
-                    let site = serde_plain::from_str(&row.name)
+                    let site = serde_plain::from_str(&row.site)
                         .tap_err(|err| tracing::error!("could not deserialize site name: {err}"))
                         .ok()?;
                     Some((site, row.site_submission_id))

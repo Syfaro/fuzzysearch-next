@@ -1,5 +1,5 @@
 SELECT
-    site "site!",
+    site::text "site!",
     site_submission_id "site_submission_id!",
     artists "artists: sqlx::types::Json<Vec<fuzzysearch_common::Artist>>",
     posted_at,

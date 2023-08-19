@@ -1,9 +1,11 @@
 use std::{collections::HashMap, time::Duration};
 
 use axum::{
+    headers::{authorization::Bearer, Authorization},
     http::{HeaderMap, HeaderValue, Request, StatusCode},
     middleware::Next,
     response::Response,
+    RequestExt, TypedHeader,
 };
 use bkapi_client::BKApiClient;
 use chrono::TimeZone;
@@ -14,11 +16,11 @@ use prometheus::{
     IntCounterVec,
 };
 use reqwest::header::HeaderName;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use fuzzysearch_common::*;
-use uuid::Uuid;
 
 const RATE_LIMIT_WINDOW: i64 = 60;
 
@@ -72,17 +74,19 @@ pub struct UserApiKey {
     pub hash_limit: i32,
 }
 
-pub async fn extract_api_key<B>(
-    mut req: Request<B>,
-    next: Next<B>,
-) -> Result<Response, StatusCode> {
-    let api_key = match req
-        .headers()
-        .get("x-api-key")
-        .map(|api_key| String::from_utf8_lossy(api_key.as_bytes()))
+pub async fn extract_api_key<B>(mut req: Request<B>, next: Next<B>) -> Result<Response, StatusCode>
+where
+    B: Send + 'static,
+{
+    let api_key = if let Ok(header) = req
+        .extract_parts::<TypedHeader<Authorization<Bearer>>>()
+        .await
     {
-        Some(api_key) => api_key,
-        None => return Err(StatusCode::UNAUTHORIZED),
+        header.token().to_string()
+    } else if let Some(value) = req.headers().get("x-api-key") {
+        String::from_utf8_lossy(value.as_bytes()).to_string()
+    } else {
+        return Err(StatusCode::UNAUTHORIZED);
     };
 
     let pool = match req.extensions().get::<PgPool>() {
@@ -90,7 +94,7 @@ pub async fn extract_api_key<B>(
         None => return Err(StatusCode::INTERNAL_SERVER_ERROR),
     };
 
-    let api_key = sqlx::query_file_as!(UserApiKey, "queries/lookup_api_key.sql", api_key.as_ref())
+    let api_key = sqlx::query_file_as!(UserApiKey, "queries/lookup_api_key.sql", &api_key)
         .fetch_optional(pool)
         .await
         .map_err(|_err| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -249,113 +253,6 @@ impl UserApiKey {
     }
 }
 
-#[derive(Debug)]
-struct DbFurAffinityFile {
-    pub id: i32,
-    pub file_id: Option<i32>,
-    pub artist: Option<String>,
-    pub hash: Option<i64>,
-    pub url: Option<String>,
-    pub filename: Option<String>,
-    pub rating: Option<String>,
-    pub posted_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub file_size: Option<i32>,
-    pub sha256: Option<Vec<u8>>,
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub deleted: bool,
-    pub tags: Option<Vec<String>>,
-}
-
-impl DbFurAffinityFile {
-    fn replace_cdn_host(url: Option<String>) -> Option<String> {
-        url.and_then(|url| url::Url::parse(&url).ok())
-            .and_then(|mut url| {
-                url.set_host(Some("d.furaffinity.net")).ok()?;
-                Some(url.to_string())
-            })
-    }
-}
-
-impl From<DbFurAffinityFile> for FurAffinityFile {
-    fn from(file: DbFurAffinityFile) -> Self {
-        FurAffinityFile {
-            id: file.id,
-            file_id: file.file_id,
-            artist: file.artist,
-            hash: file.hash,
-            hash_str: file.hash.map(|hash| hash.to_string()),
-            url: DbFurAffinityFile::replace_cdn_host(file.url),
-            filename: file.filename,
-            rating: file.rating.and_then(|rating| rating.parse().ok()),
-            posted_at: file.posted_at,
-            file_size: file.file_size,
-            sha256: file.sha256.map(hex::encode),
-            updated_at: file.updated_at,
-            deleted: file.deleted,
-            tags: file.tags.unwrap_or_default(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct HashSearch {
-    searched_hash: i64,
-    found_hash: i64,
-    distance: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct DbResult {
-    site: String,
-    id: i64,
-    hash: i64,
-    url: Option<String>,
-    filename: Option<String>,
-    artists: Option<Vec<String>>,
-    file_id: Option<i32>,
-    sources: Option<Vec<String>>,
-    rating: Option<String>,
-    posted_at: Option<chrono::DateTime<chrono::Utc>>,
-    tags: Option<Vec<String>>,
-    searched_hash: i64,
-    distance: i64,
-    sha256: Option<Vec<u8>>,
-}
-
-impl From<DbResult> for SearchResult {
-    fn from(result: DbResult) -> Self {
-        Self {
-            site_id: result.id,
-            site_id_str: result.id.to_string(),
-            url: result.url.unwrap_or_default(),
-            filename: result.filename.unwrap_or_default(),
-            artists: result.artists,
-            rating: result.rating.and_then(|rating| rating.parse().ok()),
-            tags: result.tags.unwrap_or_default(),
-            posted_at: result.posted_at,
-            sha256: result.sha256.map(hex::encode),
-            hash: Some(result.hash),
-            hash_str: Some(result.hash.to_string()),
-            distance: Some(result.distance),
-            searched_hash: Some(result.searched_hash),
-            searched_hash_str: Some(result.searched_hash.to_string()),
-            deleted: None,
-            retrieved_at: None,
-            site_info: match result.site.as_ref() {
-                "FurAffinity" => SiteInfo::FurAffinity {
-                    file_id: result.file_id.unwrap_or_default(),
-                },
-                "e621" => SiteInfo::E621 {
-                    sources: result.sources.unwrap_or_default(),
-                },
-                "Weasyl" => SiteInfo::Weasyl,
-                "Twitter" => SiteInfo::Twitter,
-                _ => SiteInfo::Unknown,
-            },
-        }
-    }
-}
-
 #[tracing::instrument(err, skip(bkapi, nats))]
 pub async fn lookup_hashes(
     bkapi: &BKApiClient,
@@ -365,10 +262,6 @@ pub async fn lookup_hashes(
     refresh_days: Option<i64>,
 ) -> eyre::Result<Vec<SearchResult>> {
     tracing::info!(distance, "starting lookup for hashes: {:?}", hashes);
-
-    if matches!(refresh_days, Some(days) if days < 1) {
-        eyre::bail!("submissions may only be loaded once per day");
-    }
 
     let bkapi_timer = BKAPI_TIME.start_timer();
     let related_hashes = bkapi.search_many(hashes, distance).await?;
@@ -403,15 +296,15 @@ pub async fn lookup_hashes(
     };
     tracing::debug!("fetch policy: {:?}", req.policy);
 
-    let resp = nats
+    let msg = nats
         .request(
             "fuzzysearch.loader.fetch".to_string(),
             bytes::Bytes::from(serde_json::to_vec(&req)?),
         )
         .await
-        .map_err(|err| eyre::eyre!("request error: {err}"))?
-        .payload;
-    let resp: FetchResponse = serde_json::from_slice(&resp)?;
+        .map_err(|err| eyre::eyre!("request error: {err}"))?;
+    tracing::trace!("resp msg: {msg:?}");
+    let resp: FetchResponse = serde_json::from_slice(&msg.payload)?;
 
     let results: Vec<_> = resp
         .submissions

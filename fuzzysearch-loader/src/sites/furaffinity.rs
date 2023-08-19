@@ -521,13 +521,14 @@ impl FurAffinityLeader {
         // we should check, so only get items up to the last non-deleted item.
 
         let known_ids: HashSet<i32> = sqlx::query_scalar!(
-            "SELECT site_submission_id::integer FROM submission WHERE site_id = 1"
+            "SELECT site_submission_id::bigint FROM submission WHERE site = 'FurAffinity'"
         )
         .fetch_all(&fa.ctx.pool)
         .await
         .expect("could not get existing submissions")
         .into_iter()
         .flatten()
+        .map(|id| id.try_into().unwrap())
         .collect();
         tracing::info!(len = known_ids.len(), "discovered known ids");
 
@@ -562,12 +563,16 @@ impl FurAffinityLeader {
     }
 
     async fn latest_loaded_id(pool: &PgPool) -> eyre::Result<i32> {
-        Ok(sqlx::query_scalar!(
-            "SELECT max(site_submission_id::integer) FROM submission WHERE site_id = 1 AND deleted = false"
+        let latest_id = sqlx::query_scalar!(
+            "SELECT max(site_submission_id::bigint) FROM submission WHERE site = 'FurAffinity' AND deleted = false"
         )
         .fetch_one(pool)
         .await?
-        .unwrap_or(0))
+        .unwrap_or(0)
+        .try_into()
+        .unwrap();
+
+        Ok(latest_id)
     }
 
     async fn loaded_submission(&self, id: i32) {
@@ -789,7 +794,7 @@ impl FurAffinityLeader {
 
                 async move {
                     let sub_exists = sqlx::query_scalar!(
-                        "SELECT 1 one FROM submission WHERE site_id = 1 AND site_submission_id = $1",
+                        "SELECT 1 one FROM submission WHERE site = 'FurAffinity' AND site_submission_id = $1",
                         missing_id.to_string()
                     )
                     .fetch_optional(&leader.fa.ctx.pool)

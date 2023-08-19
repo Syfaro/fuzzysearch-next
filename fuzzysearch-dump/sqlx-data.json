@@ -1,5 +1,59 @@
 {
   "db": "PostgreSQL",
+  "1a507575c67b8542b61e2480003eba04d96a90f192111062ef005c7bdc56b4b8": {
+    "describe": {
+      "columns": [
+        {
+          "name": "site!",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "site_submission_id!",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "artists: sqlx::types::Json<Vec<fuzzysearch_common::Artist>>",
+          "ordinal": 2,
+          "type_info": "Jsonb"
+        },
+        {
+          "name": "posted_at",
+          "ordinal": 3,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "retrieved_at",
+          "ordinal": 4,
+          "type_info": "Timestamptz"
+        },
+        {
+          "name": "deleted!",
+          "ordinal": 5,
+          "type_info": "Bool"
+        },
+        {
+          "name": "media: sqlx::types::Json<Vec<fuzzysearch_common::Media>>",
+          "ordinal": 6,
+          "type_info": "Jsonb"
+        }
+      ],
+      "nullable": [
+        null,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "SELECT\n    site::text \"site!\",\n    site_submission_id \"site_submission_id!\",\n    artists \"artists: sqlx::types::Json<Vec<fuzzysearch_common::Artist>>\",\n    posted_at,\n    retrieved_at,\n    deleted \"deleted!\",\n    media \"media: sqlx::types::Json<Vec<fuzzysearch_common::Media>>\"\nFROM submission_latest;\n"
+  },
   "53890793cd861ae98b21d5659e90a40cf801f4a516066e745abd0b1c9612068b": {
     "describe": {
       "columns": [
@@ -47,60 +101,6 @@
       }
     },
     "query": "SELECT reltuples::bigint AS estimate FROM pg_class WHERE relname = 'submission';\n"
-  },
-  "979873dec4969ab1e00aaa52bd5284b92838c4e02934440e6e31cc14b49fbe21": {
-    "describe": {
-      "columns": [
-        {
-          "name": "site!",
-          "ordinal": 0,
-          "type_info": "Text"
-        },
-        {
-          "name": "site_submission_id!",
-          "ordinal": 1,
-          "type_info": "Text"
-        },
-        {
-          "name": "artists: sqlx::types::Json<Vec<fuzzysearch_common::Artist>>",
-          "ordinal": 2,
-          "type_info": "Jsonb"
-        },
-        {
-          "name": "posted_at",
-          "ordinal": 3,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "retrieved_at",
-          "ordinal": 4,
-          "type_info": "Timestamptz"
-        },
-        {
-          "name": "deleted!",
-          "ordinal": 5,
-          "type_info": "Bool"
-        },
-        {
-          "name": "media: sqlx::types::Json<Vec<fuzzysearch_common::Media>>",
-          "ordinal": 6,
-          "type_info": "Jsonb"
-        }
-      ],
-      "nullable": [
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true
-      ],
-      "parameters": {
-        "Left": []
-      }
-    },
-    "query": "SELECT\n    site \"site!\",\n    site_submission_id \"site_submission_id!\",\n    artists \"artists: sqlx::types::Json<Vec<fuzzysearch_common::Artist>>\",\n    posted_at,\n    retrieved_at,\n    deleted \"deleted!\",\n    media \"media: sqlx::types::Json<Vec<fuzzysearch_common::Media>>\"\nFROM submission_latest;\n"
   },
   "dbcb1e00a3124c05d23c404a921ef98f0eb5b04df7cddea65983657cf0fb478d": {
     "describe": {

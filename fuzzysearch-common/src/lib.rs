@@ -6,22 +6,6 @@ use serde_with::{hex::Hex, serde_as, DisplayFromStr, DurationMilliSeconds, PickF
 #[cfg(feature = "api-types")]
 use utoipa::ToSchema;
 
-/// A service that FuzzySearch supports.
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "api-types", derive(ToSchema))]
-#[serde(rename_all = "snake_case")]
-pub enum Service {
-    Twitter,
-}
-
-impl std::fmt::Display for Service {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Twitter => write!(f, "Twitter"),
-        }
-    }
-}
-
 /// The rating of a given submission.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
@@ -174,26 +158,7 @@ impl SearchResult {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "api-types", derive(ToSchema))]
-pub struct FurAffinityFile {
-    pub id: i32,
-    pub file_id: Option<i32>,
-    pub artist: Option<String>,
-    pub hash: Option<i64>,
-    pub hash_str: Option<String>,
-    pub url: Option<String>,
-    pub filename: Option<String>,
-    pub rating: Option<Rating>,
-    pub posted_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub file_size: Option<i32>,
-    pub sha256: Option<String>,
-    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub deleted: bool,
-    pub tags: Vec<String>,
-}
-
-/// A site that the loader can fetch information from.
+/// A site hosting submissions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
 pub enum Site {

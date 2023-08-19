@@ -145,13 +145,17 @@ async fn main() -> eyre::Result<()> {
         .route("/hashes", routing::get(api::search_image_by_hashes))
         .route("/image", routing::post(api::search_image_by_upload))
         .route("/url", routing::get(api::search_image_by_url))
-        .route("/submission", routing::post(api::lookup_submissions))
-        .route("/live", routing::get(api::ws_live))
         .route_layer(middleware::from_fn(db::extract_api_key));
 
-    let api = Router::new()
+    let api_v1 = Router::new()
         .merge(authenticated_api)
         .route("/dump/latest", routing::get(api::dump_latest))
+        .layer(api_layer.clone());
+
+    let api_v2 = Router::new()
+        .route("/submission", routing::post(api::lookup_submissions))
+        .route("/live", routing::get(api::ws_live))
+        .route_layer(middleware::from_fn(db::extract_api_key))
         .layer(api_layer);
 
     let app_layer = ServiceBuilder::new()
@@ -182,8 +186,9 @@ async fn main() -> eyre::Result<()> {
             SwaggerUi::new("/swagger-ui")
                 .url("/api-doc/openapi.json", api::FuzzySearchApi::openapi()),
         )
-        .nest("/v1", api.clone())
-        .merge(api)
+        .nest("/v2", api_v2)
+        .nest("/v1", api_v1.clone())
+        .merge(api_v1)
         .nest(
             "/selfserve",
             selfserve::router()

@@ -15,7 +15,7 @@ use sqlx::PgPool;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use utoipa::{
-    openapi::security::{ApiKey, ApiKeyValue, SecurityScheme},
+    openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
     IntoParams, Modify, OpenApi, ToSchema,
 };
 
@@ -38,14 +38,12 @@ use crate::{db, hash_image, ReportError};
             FetchedSubmission,
             FetchedSubmissionData,
             FetchStatus,
-            FurAffinityFile,
             Image,
             ImageError,
             Media,
             MediaFrame,
             Rating,
             SearchResult,
-            Service,
             Site,
             SiteInfo,
             Submission,
@@ -55,9 +53,6 @@ use crate::{db, hash_image, ReportError};
         )
     ),
     modifiers(&ApiTokenAddon),
-    tags(
-        (name = "fuzzysearch-api", description = "FuzzySearch image search API")
-    )
 )]
 pub struct FuzzySearchApi;
 
@@ -68,7 +63,7 @@ impl Modify for ApiTokenAddon {
         if let Some(components) = openapi.components.as_mut() {
             components.add_security_scheme(
                 "api_key",
-                SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("x-api-key"))),
+                SecurityScheme::Http(HttpBuilder::new().scheme(HttpAuthScheme::Bearer).build()),
             )
         }
     }
@@ -102,8 +97,8 @@ pub struct HashesQuery {
     path = "/v1/hashes",
     responses(
         (status = 200, description = "Image lookup completed successfully", body = [SearchResult]),
-        (status = 429, description = "Rate limit exhausted"),
         (status = 401, description = "Invalid or missing API token"),
+        (status = 429, description = "Rate limit exhausted"),
     ),
     security(
         ("api_key" = [])
@@ -155,9 +150,9 @@ enum ImageError {
     request_body(content = Image, content_type = "multipart/form-data"),
     responses(
         (status = 200, description = "Image lookup completed successfully", body = [SearchResult]),
-        (status = 429, description = "Rate limit exhausted"),
         (status = 400, description = "Image was invalid", body = ImageError),
         (status = 401, description = "Invalid or missing API token"),
+        (status = 429, description = "Rate limit exhausted"),
     ),
     security(
         ("api_key" = [])
@@ -248,9 +243,9 @@ enum UrlError {
     path = "/v1/url",
     responses(
         (status = 200, description = "Image lookup completed successfully", body = [SearchResult]),
-        (status = 429, description = "Rate limit exhausted"),
         (status = 400, description = "URL invalid or too large", body = UrlError),
         (status = 401, description = "Invalid or missing API token"),
+        (status = 429, description = "Rate limit exhausted"),
     ),
     params(
         SearchByUrlQuery,
@@ -348,12 +343,13 @@ pub struct SubmissionFetchForm {
 /// Lookup submissions, re-fetching data if too old.
 #[utoipa::path(
     post,
-    path = "/v1/submission",
+    path = "/v2/submission",
     request_body = SubmissionFetchForm,
     responses(
         (status = 200, description = "Image lookup completed successfully", body = [FetchedSubmission]),
-        (status = 429, description = "Rate limit exhausted"),
+        (status = 400, description = "Invalid request", body = String),
         (status = 401, description = "Invalid or missing API token"),
+        (status = 429, description = "Rate limit exhausted"),
     ),
     security(
         ("api_key" = [])
@@ -378,7 +374,11 @@ pub async fn lookup_submissions(
         query: SubmissionQuery::SubmissionId { submission_ids },
         policy: if let Some(days) = form.refresh_after_days {
             if days < 1 {
-                return Err(eyre::eyre!("submissions may only be loaded once per day").into());
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    "Submissions may only be loaded once per day",
+                )
+                    .into_response());
             }
 
             FetchPolicy::Maybe {
