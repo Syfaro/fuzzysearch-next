@@ -28,7 +28,7 @@ create table submission (
 );
 
 create unique index submission_site_lookup_idx on submission (site, site_submission_id, retrieved_at desc) nulls not distinct;
-create index submission_retrieved_at_idx on submission (retrieved_at desc);
+create index submission_retrieved_at_idx on submission (retrieved_at desc nulls last);
 create index submission_site_id_num_idx on submission (site, (site_submission_id::bigint));
 
 create table submission_artist (
@@ -41,8 +41,8 @@ create table media (
 	id uuid primary key default gen_random_uuid(),
 	file_sha256 bytea unique,
 	file_size bigint,
-	mime_type text,
 	single_frame boolean,
+	mime_type text,
 	created_at timestamp without time zone not null default current_timestamp
 );
 
@@ -53,7 +53,7 @@ create table media_frame (
 	perceptual_gradient bigint
 );
 
-create unique index media_frame_idx on media_frame (media_id, frame_index);
+create unique index media_frame_idx on media_frame (media_id, frame_index) include (perceptual_gradient);
 create index media_frame_perceptual_gradient_idx on media_frame using hash (perceptual_gradient) where (perceptual_gradient is not null);
 
 create table submission_media (

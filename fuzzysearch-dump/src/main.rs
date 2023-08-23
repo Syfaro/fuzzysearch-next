@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use async_compression::tokio::write::GzipEncoder;
 use clap::Parser;
+use object_store::{aws::AmazonS3Builder, ObjectStore};
 use serde::Serialize;
 use serde_with::{base64::Base64, serde_as};
 use tokio::io::AsyncWriteExt;
@@ -33,20 +34,15 @@ mod artist {
 
 #[derive(Parser)]
 struct Config {
+    /// Database URL to pull entries from and store dump information.
     #[clap(long, env)]
     database_url: String,
-
+    /// Prefix to use for URLs of files uploaded to the store.
     #[clap(long, env)]
-    s3_endpoint: String,
+    file_prefix: String,
+    /// Bucket for storing files.
     #[clap(long, env)]
-    s3_region: String,
-    #[clap(long, env)]
-    s3_key: String,
-    #[clap(long, env)]
-    s3_secret: String,
-
-    #[clap(long, env)]
-    s3_bucket: String,
+    store_bucket: String,
 }
 
 #[tokio::main]
@@ -64,10 +60,23 @@ async fn main() {
 
     tracing::info!("creating export file");
 
-    let file = tokio::fs::File::create("fuzzysearch-dump.csv.gz")
+    let object_store = AmazonS3Builder::from_env()
+        .with_bucket_name(&config.store_bucket)
+        .build()
+        .expect("could not build object store");
+
+    let object_path = format!(
+        "fuzzysearch-dump-{}.csv.gz",
+        chrono::Utc::now().format("%Y%m%d")
+    )
+    .try_into()
+    .unwrap();
+
+    let (_id, wtr) = object_store
+        .put_multipart(&object_path)
         .await
-        .expect("could not create output file");
-    let compressor = GzipEncoder::new(file);
+        .expect("put multipart failed");
+    let compressor = GzipEncoder::new(wtr);
     let mut dump = csv_async::AsyncSerializer::from_writer(compressor);
 
     let estimated_count = sqlx::query_file_scalar!("queries/estimate_rows.sql")
@@ -85,7 +94,7 @@ async fn main() {
             .unwrap(),
     );
     pb.enable_steady_tick(Duration::from_millis(100));
-    pb.set_message("Exporting Submissions");
+    pb.set_message("Storing Submissions");
 
     let rows = sqlx::query_file!("queries/export_submission.sql").fetch(&pool);
     let mut rows = pb.wrap_stream(rows);
@@ -98,77 +107,56 @@ async fn main() {
             .into_iter()
             .map(|artist| artist.site_artist_id)
             .collect();
+        let media = row.media.map(|media| media.0).unwrap_or_default();
 
-        for media in row.media.map(|media| media.0).unwrap_or_default() {
-            let Some(frame) = media.frames.unwrap_or_default().pop() else {
-                continue;
-            };
-
+        if media.is_empty() {
             dump.serialize(&Item {
                 site: &row.site,
                 id: &row.site_submission_id,
                 artists: &artists,
-                hash: frame.perceptual_gradient,
+                hash: None,
                 posted_at: row.posted_at,
                 updated_at: row.retrieved_at,
-                sha256: media.file_sha256,
+                sha256: None,
                 deleted: row.deleted,
             })
             .await
-            .expect("could not write row");
+            .expect("could not write empty row");
+        } else {
+            for entry in media {
+                dump.serialize(&Item {
+                    site: &row.site,
+                    id: &row.site_submission_id,
+                    artists: &artists,
+                    hash: entry
+                        .frames
+                        .unwrap_or_default()
+                        .first()
+                        .and_then(|frame| frame.perceptual_gradient),
+                    posted_at: row.posted_at,
+                    updated_at: row.retrieved_at,
+                    sha256: entry.file_sha256,
+                    deleted: row.deleted,
+                })
+                .await
+                .expect("could not write media row");
+            }
         }
     }
 
     let mut compressor = dump.into_inner().await.unwrap();
     compressor.shutdown().await.unwrap();
 
-    let mut file = compressor.into_inner();
-    file.flush().await.unwrap();
+    let mut wtr = compressor.into_inner();
+    wtr.flush().await.unwrap();
 
-    pb.abandon_with_message("Completed Export");
-
-    tracing::info!("starting upload");
-
-    let bucket = s3::Bucket::new(
-        &config.s3_bucket,
-        s3::Region::Custom {
-            region: config.s3_region,
-            endpoint: config.s3_endpoint.clone(),
-        },
-        s3::creds::Credentials::new(
-            Some(&config.s3_key),
-            Some(&config.s3_secret),
-            None,
-            None,
-            None,
-        )
-        .unwrap(),
-    )
-    .unwrap()
-    .with_path_style();
-
-    let mut dump_file = tokio::fs::File::open("fuzzysearch-dump.csv.gz")
-        .await
-        .unwrap();
-
-    let object_path = format!(
-        "fuzzysearch-dump-{}.csv.gz",
-        chrono::Utc::now().format("%Y%m%d")
-    );
-
-    bucket
-        .put_object_stream(&mut dump_file, &object_path)
-        .await
-        .unwrap();
+    pb.abandon_with_message("Completed Dump");
 
     tracing::info!("inserting row");
 
     sqlx::query_file!(
         "queries/insert_dump.sql",
-        format!(
-            "{}/{}/{}",
-            config.s3_endpoint, config.s3_bucket, object_path
-        )
+        format!("{}/{}", config.file_prefix, object_path)
     )
     .execute(&pool)
     .await
@@ -180,10 +168,15 @@ async fn main() {
         .unwrap();
 
     for url in needing_delete {
-        let path = url.split('/').last().expect("could not get path from url");
-        tracing::info!(path, "deleting old dump");
+        let path = url
+            .split('/')
+            .last()
+            .expect("could not get path from url")
+            .try_into()
+            .unwrap();
+        tracing::info!(%path, "deleting old dump");
 
-        if let Err(err) = bucket.delete_object(path).await {
+        if let Err(err) = object_store.delete(&path).await {
             tracing::error!("could not delete object: {err}");
             continue;
         }

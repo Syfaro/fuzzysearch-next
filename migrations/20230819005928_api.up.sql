@@ -52,6 +52,6 @@ create table api.webhook (
 );
 
 create table api.dump (
-	created_at timestamp with time zone primary key,
+	created_at timestamp with time zone primary key default current_timestamp,
 	url text not null
 );
