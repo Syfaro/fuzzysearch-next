@@ -7,11 +7,11 @@ authors = ["Syfaro <syfaro@huefox.com>"]
 publish = false
 
 [dependencies]
-askama = { version = "0.11.1", features = ["serde-json", "with-axum"] }
-askama_axum = "0.2.1"
-axum = { version = "0.6.3", features = ["multipart", "macros"] }
-axum-sessions = "0.4.1"
-axum-tracing-opentelemetry = "0.9.0"
+askama = { version = "0.12.1", features = ["serde-json", "with-axum"] }
+askama_axum = "0.4.0"
+axum = { version = "0.7.4", features = ["multipart", "macros"] }
+tower-sessions = "0.10.2"
+axum-tracing-opentelemetry = "0.16.0"
 bkapi-client = { git = "https://github.com/Syfaro/bkapi.git" }
 bytes = "1.2.1"
 chrono = { version = "0.4.22", features = ["serde"] }
@@ -23,25 +23,26 @@ foxlib = { git = "https://github.com/Syfaro/foxlib.git", features = ["hash", "fl
 hex = "0.4.3"
 img_hash = "3.2.0"
 lazy_static = "1.4.0"
-pomsky-macro = "0.9.0"
+pomsky-macro = "0.11.0"
 prometheus = { version = "0.13.3", features = ["process"] }
 rand = "0.8.4"
 regex = "1.6.0"
 reqwest = { version = "0.11.11", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1.0.144", features = ["derive"] }
-serde_json = "1.0.85"
+serde_json = { version = "1.0.85", features = ["arbitrary_precision"] }
 sqlx = { version = "0.6.1", features = ["postgres", "offline", "runtime-tokio-rustls", "chrono", "json", "uuid"] }
 thiserror = "1.0.38"
 tokio = { version = "1.20.1", features = ["macros"] }
 tower = "0.4.13"
-tower-http = { version = "0.3.4", features = ["cors", "trace", "auth", "fs"] }
+tower-http = { version = "0.5.1", features = ["cors", "trace", "auth", "fs"] }
 tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
 url = "2.2.2"
 urlencoding = "2.1.2"
-utoipa = { version = "3.0.2", features = ["axum_extras", "chrono"] }
-utoipa-swagger-ui = { version = "3.0.1", features = ["axum"] }
+utoipa = { version = "4.2.0", features = ["axum_extras", "chrono"] }
+utoipa-swagger-ui = { version = "6.0.0", features = ["axum"] }
 webauthn-rs = { version = "0.4.8", features = ["resident-key-support", "danger-allow-state-serialisation", "preview-features"] }
 webauthn-rs-proto = "0.4.8"
+futures = "0.3.30"
 
 fuzzysearch-common = { path = "../fuzzysearch-common", features = ["api-types"] }

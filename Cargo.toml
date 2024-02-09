@@ -7,5 +7,7 @@ members = [
     "fuzzysearch-web"
 ]
 
+resolver = "2"
+
 [workspace.metadata.release]
 sign-tag = true

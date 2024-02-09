@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use axum::{
-    http::{HeaderMap, HeaderValue, Request, StatusCode},
+    extract::Request,
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     middleware::Next,
     response::Response,
 };
@@ -13,7 +14,6 @@ use prometheus::{
     register_histogram, register_int_counter, register_int_counter_vec, Histogram, IntCounter,
     IntCounterVec,
 };
-use reqwest::header::HeaderName;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
@@ -71,10 +71,7 @@ pub struct UserApiKey {
     pub hash_limit: i16,
 }
 
-pub async fn extract_api_key<B>(
-    mut req: Request<B>,
-    next: Next<B>,
-) -> Result<Response, StatusCode> {
+pub async fn extract_api_key(mut req: Request, next: Next) -> Result<Response, StatusCode> {
     let api_key = match req
         .headers()
         .get("x-api-key")

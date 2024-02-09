@@ -1,7 +1,5 @@
 import "bootstrap";
 
-import "./htmx";
-
 import manageTheme from "./theme";
 import handleErrors from "./errors";
 import handleLogin from "./login";

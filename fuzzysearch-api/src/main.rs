@@ -1,17 +1,13 @@
-use std::{fmt::Display, net::SocketAddr, sync::Arc, time::Duration};
+use std::{fmt::Display, net::SocketAddr, sync::Arc};
 
 use axum::{
     async_trait,
     http::{header::HeaderName, Method, StatusCode},
     middleware,
     response::{IntoResponse, Redirect},
-    routing, Extension, Router, Server,
+    routing, Extension, Router,
 };
-use axum_sessions::{
-    async_session::{Session, SessionStore},
-    SessionLayer,
-};
-use axum_tracing_opentelemetry::opentelemetry_tracing_layer;
+use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
 use bkapi_client::BKApiClient;
 use clap::Parser;
 use enum_map::Enum;
@@ -26,6 +22,9 @@ use tower_http::{
     cors::{Any, CorsLayer},
     services::ServeDir,
     trace::TraceLayer,
+};
+use tower_sessions::{
+    cookie::time::Duration, session::Record, session_store, SessionManagerLayer, SessionStore,
 };
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -74,9 +73,9 @@ struct Config {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Enum)]
 enum Features {
-    #[serde(rename = "fuzzysearch_self_serve")]
+    #[serde(rename = "fuzzysearch.api.self-serve")]
     SelfServe,
-    #[serde(rename = "fuzzysearch_discoverable_authentication")]
+    #[serde(rename = "fuzzysearch.api.self-serve.discoverable-auth")]
     DiscoverableAuth,
 }
 
@@ -95,18 +94,13 @@ async fn main() -> eyre::Result<()> {
         otlp: config.json_logs,
     });
 
-    let session_secret = hex::decode(&config.session_secret)?;
-    if session_secret.len() != 64 {
-        panic!("wrong session secret length");
-    }
-
     foxlib::MetricsServer::serve(config.metrics_host, true).await;
 
     let bkapi = BKApiClient::new(config.bkapi_endpoint);
     let pool = PgPool::connect(&config.database_url).await?;
 
     let client = reqwest::ClientBuilder::default()
-        .timeout(Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(10))
         .build()?;
 
     let unleash = foxlib::flags::client::<Features>(
@@ -161,8 +155,10 @@ async fn main() -> eyre::Result<()> {
     let store = DbStore { pool };
     store.cleanup_task().await;
 
-    let selfserve_session =
-        SessionLayer::new(store, &session_secret).with_cookie_name("fuzzysearch.selfserve");
+    let selfserve_session = SessionManagerLayer::new(store)
+        .with_name("fuzzysearch.selfserve")
+        .with_same_site(tower_sessions::cookie::SameSite::Lax)
+        .with_expiry(tower_sessions::Expiry::OnInactivity(Duration::days(7)));
 
     let app = Router::new()
         .route("/", routing::get(|| async { Redirect::to("/swagger-ui") }))
@@ -180,17 +176,16 @@ async fn main() -> eyre::Result<()> {
         )
         .nest_service(
             "/assets",
-            routing::get_service(ServeDir::new("./dist")).handle_error(
-                |err: std::io::Error| async move { (StatusCode::NOT_FOUND, err.to_string()) },
-            ),
+            routing::get_service(ServeDir::new("./dist"))
+                .handle_error(|_| async { StatusCode::NOT_FOUND }),
         )
         .layer(app_layer)
-        .layer(opentelemetry_tracing_layer());
+        .layer(OtelAxumLayer::default());
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("starting on {}", addr);
-
-    Server::bind(&addr).serve(app.into_make_service()).await?;
+    axum::serve(listener, app).await?;
 
     Ok(())
 }
@@ -255,53 +250,50 @@ impl DbStore {
 
 #[async_trait]
 impl SessionStore for DbStore {
-    async fn load_session(
-        &self,
-        cookie_value: String,
-    ) -> axum_sessions::async_session::Result<Option<axum_sessions::async_session::Session>> {
-        let id = Session::id_from_cookie_value(&cookie_value)?;
+    async fn save(&self, record: &Record) -> session_store::Result<()> {
+        let id = record.id.0;
+        let expires_at =
+            chrono::DateTime::<chrono::Utc>::from_timestamp(record.expiry_date.unix_timestamp(), 0)
+                .unwrap();
+        let data = serde_json::to_value(record)
+            .map_err(|err| session_store::Error::Encode(err.to_string()))?;
 
-        let data = sqlx::query_file_scalar!("queries/session/load_session.sql", id)
-            .fetch_optional(&self.pool)
-            .await?
-            .flatten()
-            .and_then(|data| serde_json::from_value(data).ok());
-
-        Ok(data)
-    }
-
-    async fn store_session(
-        &self,
-        session: axum_sessions::async_session::Session,
-    ) -> axum_sessions::async_session::Result<Option<String>> {
-        let id = session.id();
-        let expires_at = session.expiry();
-        let data = serde_json::to_value(&session)?;
-
-        sqlx::query_file!("queries/session/store_session.sql", id, expires_at, data)
-            .execute(&self.pool)
-            .await?;
-
-        Ok(session.into_cookie_value())
-    }
-
-    async fn destroy_session(
-        &self,
-        session: axum_sessions::async_session::Session,
-    ) -> axum_sessions::async_session::Result {
-        let id = session.id();
-
-        sqlx::query_file!("queries/session/destroy_session.sql", id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query_file!(
+            "queries/session/store_session.sql",
+            id.to_string(),
+            expires_at,
+            data
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|err| session_store::Error::Backend(err.to_string()))?;
 
         Ok(())
     }
 
-    async fn clear_store(&self) -> axum_sessions::async_session::Result {
-        sqlx::query_file!("queries/session/clear_store.sql")
-            .execute(&self.pool)
-            .await?;
+    async fn load(
+        &self,
+        session_id: &tower_sessions::session::Id,
+    ) -> session_store::Result<Option<Record>> {
+        let data =
+            sqlx::query_file_scalar!("queries/session/load_session.sql", session_id.0.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|err| session_store::Error::Backend(err.to_string()))?
+                .flatten()
+                .and_then(|data| serde_json::from_value(data).ok());
+
+        Ok(data)
+    }
+
+    async fn delete(&self, session_id: &tower_sessions::session::Id) -> session_store::Result<()> {
+        sqlx::query_file!(
+            "queries/session/destroy_session.sql",
+            session_id.0.to_string()
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|err| session_store::Error::Backend(err.to_string()))?;
 
         Ok(())
     }
