@@ -162,6 +162,7 @@ async fn main() -> eyre::Result<()> {
 
     let app = Router::new()
         .route("/", routing::get(|| async { Redirect::to("/swagger-ui") }))
+        .route("/healthz", routing::get(|| async { "OK" }))
         .merge(
             SwaggerUi::new("/swagger-ui")
                 .url("/api-doc/openapi.json", api::FuzzySearchApi::openapi()),
