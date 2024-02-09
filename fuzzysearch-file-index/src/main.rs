@@ -343,8 +343,7 @@ async fn main() -> Result<()> {
                 }
 
                 let color = if use_color {
-                    (count * color_scale).clamp(0, ImageDepth::MAX.try_into().unwrap())
-                        as ImageDepth
+                    (count * color_scale).clamp(0, ImageDepth::MAX.into()) as ImageDepth
                 } else {
                     0
                 };
@@ -564,7 +563,6 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
             .read_from_container(&mut file)
             .map(|exif| {
                 exif.fields()
-                    .into_iter()
                     .map(|field| ExifEntry {
                         tag_number: field.tag.number(),
                         tag_description: field.tag.description().map(ToString::to_string),
