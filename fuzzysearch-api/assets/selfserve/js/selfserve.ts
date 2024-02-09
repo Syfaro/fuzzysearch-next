@@ -4,6 +4,8 @@ import manageTheme from "./theme";
 import handleErrors from "./errors";
 import handleLogin from "./login";
 
+import "../css/selfserve.scss";
+
 function initialize() {
   manageTheme();
   handleErrors();
