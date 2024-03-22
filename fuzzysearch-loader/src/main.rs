@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use async_nats::service::ServiceExt;
 use clap::Parser;
 use futures::StreamExt;
-use object_store::{aws::AmazonS3Builder, ObjectStore};
+use object_store::aws::AmazonS3Builder;
 use sqlx::PgPool;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -56,7 +56,7 @@ pub struct SiteContext {
     pool: PgPool,
     nats: async_nats::Client,
     token: CancellationToken,
-    object_store: Arc<dyn ObjectStore>,
+    object_store: object_store::aws::AmazonS3,
 }
 
 #[tokio::main]
@@ -90,11 +90,10 @@ async fn main() -> eyre::Result<()> {
     }
     let client = client_builder.build()?;
 
-    let s3 = AmazonS3Builder::from_env()
+    let object_store = AmazonS3Builder::from_env()
         .with_bucket_name(&config.store_bucket)
         .build()
         .expect("could not build object store");
-    let object_store: Arc<dyn ObjectStore> = Arc::new(s3);
 
     let ctx = Arc::new(SiteContext {
         config: config.clone(),
@@ -150,7 +149,7 @@ async fn main() -> eyre::Result<()> {
                     }
                 }
                 "fuzzysearch.loader.watch" => {
-                    todo!()
+                    todo!("watching")
                 }
                 _ => unreachable!("got unknown subject: {}", request.message.subject),
             }

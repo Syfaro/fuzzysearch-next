@@ -17,6 +17,7 @@ create table submission (
 	site site not null,
 	site_submission_id text not null collate numeric,
 	retrieved_at timestamp with time zone,
+	fetch_reason text not null,
 	link text not null,
 	deleted boolean not null,
 	posted_at timestamp with time zone,

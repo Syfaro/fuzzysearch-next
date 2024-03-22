@@ -7,7 +7,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::TimeZone;
 use eyre::ContextCompat;
 use futures::StreamExt;
 use fuzzysearch_common::{Artist, Rating, Site};
@@ -310,7 +309,7 @@ impl FurAffinity {
                 crate::sites::insert_submission(
                     &self.ctx.pool,
                     &self.ctx.nats,
-                    FetchReason::Live,
+                    FetchReason::Feed,
                     &mut sub,
                 )
                 .await?;
@@ -330,7 +329,6 @@ impl LoadableSite for FurAffinity {
         Site::FurAffinity
     }
 
-    #[tracing::instrument(skip(self))]
     async fn load(&self, id: &str) -> eyre::Result<SubmissionResult> {
         self.load_submission(id).await
     }
@@ -343,7 +341,7 @@ fn join_text_nodes(elem: scraper::ElementRef) -> String {
 fn parse_date(date: &str) -> eyre::Result<chrono::DateTime<chrono::Utc>> {
     let date_str = DATE_CLEANER.replace(date, "$1");
 
-    let date = chrono::Utc.datetime_from_str(&date_str, "%b %e, %Y %l:%M %p")?;
+    let date = chrono::NaiveDateTime::parse_from_str(&date_str, "%b %e, %Y %l:%M %p")?.and_utc();
 
     Ok(date)
 }
@@ -516,12 +514,8 @@ impl FurAffinityLeader {
     async fn new(fa: Arc<FurAffinity>) -> Arc<Self> {
         tracing::info!("creating leader");
 
-        // It's possible a larger ID was requested than actually exists. We
-        // don't want this saved value to cause an inflation over values that
-        // we should check, so only get items up to the last non-deleted item.
-
         let known_ids: HashSet<i32> = sqlx::query_scalar!(
-            "SELECT site_submission_id::bigint FROM submission WHERE site = 'FurAffinity'"
+            "SELECT site_submission_id::bigint FROM submission WHERE site = 'FurAffinity' AND fetch_reason = 'feed'"
         )
         .fetch_all(&fa.ctx.pool)
         .await
@@ -564,7 +558,7 @@ impl FurAffinityLeader {
 
     async fn latest_loaded_id(pool: &PgPool) -> eyre::Result<i32> {
         let latest_id = sqlx::query_scalar!(
-            "SELECT max(site_submission_id::bigint) FROM submission WHERE site = 'FurAffinity' AND deleted = false"
+            "SELECT max(site_submission_id::bigint) FROM submission WHERE site = 'FurAffinity' AND fetch_reason = 'feed'"
         )
         .fetch_one(pool)
         .await?
@@ -794,7 +788,7 @@ impl FurAffinityLeader {
 
                 async move {
                     let sub_exists = sqlx::query_scalar!(
-                        "SELECT 1 one FROM submission WHERE site = 'FurAffinity' AND site_submission_id = $1",
+                        "SELECT 1 one FROM submission WHERE site = 'FurAffinity' AND site_submission_id = $1 AND fetch_reason = 'feed'",
                         missing_id.to_string()
                     )
                     .fetch_optional(&leader.fa.ctx.pool)

@@ -20,7 +20,7 @@ use crate::sites::{BoxSite, LoadSubmissions, SubmissionResult};
 pub enum FetchReason {
     #[serde(rename = "demand")]
     OnDemand,
-    Live,
+    Feed,
 }
 
 async fn fetch_existing_submissions(
@@ -189,8 +189,8 @@ pub async fn handle_fetch(
 
     let needing_load: Vec<_> = submission_ids
         .iter()
-        .cloned()
         .filter(|id| !ready_submissions.contains_key(id))
+        .cloned()
         .collect();
     tracing::debug!("submissions still needing load: {needing_load:?}");
 
@@ -260,8 +260,8 @@ pub async fn handle_fetch(
 
     let needing_load: Vec<_> = submission_ids
         .iter()
-        .cloned()
         .filter(|id| !ready_submissions.contains_key(id))
+        .cloned()
         .collect();
     tracing::debug!("submissions still needing load: {needing_load:?}");
 

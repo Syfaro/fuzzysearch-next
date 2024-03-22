@@ -6,7 +6,7 @@ use foxlib::hash::image::AnimationDecoder;
 use futures::{stream::FuturesUnordered, TryStreamExt};
 use fuzzysearch_common::{Artist, Media, MediaFrame, Site, Submission};
 use lazy_static::lazy_static;
-use object_store::path::Path;
+use object_store::{path::Path, signer::Signer, ObjectStore};
 use prometheus::{
     register_histogram_vec, register_int_counter_vec, HistogramOpts, HistogramVec, IntCounterVec,
     Opts,
@@ -222,7 +222,7 @@ pub async fn process_file(
         return Ok(Media {
             site_id,
             url: Some(url.to_string()),
-            file_sha256: Some(sha256.try_into().unwrap()),
+            file_sha256: Some(sha256.into()),
             file_size: Some(file_size as i64),
             mime_type,
             frames: media.perceptual_gradients.map(|perceptual_gradients| {
@@ -309,7 +309,7 @@ pub async fn process_file(
     Ok(Media {
         site_id,
         url: Some(url.to_string()),
-        file_sha256: Some(sha256.try_into().unwrap()),
+        file_sha256: Some(sha256.into()),
         file_size: Some(file_size as i64),
         mime_type,
         frames: Some(frames),
@@ -325,10 +325,9 @@ async fn store_file(
 ) -> eyre::Result<()> {
     let sha256_hex = hex::encode(sha256);
     tracing::Span::current().record("sha256", &sha256_hex);
-    tracing::info!("storing file");
 
     let path = Path::from_iter([&sha256_hex[0..2], &sha256_hex[2..4], &sha256_hex]);
-    tracing::trace!("storing file at {path}");
+    tracing::info!(%path, "storing file");
 
     file.rewind().await?;
 
@@ -336,11 +335,23 @@ async fn store_file(
     tokio::io::copy(&mut file, &mut writer).await?;
     writer.shutdown().await?;
 
+    let url = ctx
+        .object_store
+        .signed_url(
+            reqwest::Method::GET,
+            &path,
+            std::time::Duration::from_secs(60 * 60 * 24),
+        )
+        .await
+        .ok()
+        .map(|url| url.as_str().to_string());
+
     ctx.nats
         .publish(
             "fuzzysearch.loader.store".to_string(),
             serde_json::json!({
                 "sha256": sha256_hex,
+                "url": url,
             })
             .to_string()
             .into(),
@@ -556,6 +567,7 @@ pub async fn insert_submission(
             .map(|rating| serde_plain::to_string(rating).unwrap()),
         submission.retrieved_at,
         submission.extra,
+        serde_plain::to_string(&reason).unwrap(),
     )
     .fetch_one(&mut tx)
     .await?;
