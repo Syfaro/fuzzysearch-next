@@ -16,7 +16,7 @@ use tracing::Instrument;
 use crate::sites::{BoxSite, LoadSubmissions, SubmissionResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum FetchReason {
     #[serde(rename = "demand")]
     OnDemand,
@@ -139,13 +139,13 @@ pub async fn handle_fetch(
     let mut ready_submissions: HashMap<(Site, String), FetchedSubmission> =
         HashMap::with_capacity(submission_ids.len());
 
-    tracing::debug!("request policy: {:?}", req.policy);
+    tracing::trace!("request policy: {:?}", req.policy);
 
     if matches!(req.policy, FetchPolicy::Never | FetchPolicy::Maybe { .. }) {
         tracing::debug!("looking for cached values");
 
         let submissions = fetch_existing_submissions(&pool, &submission_ids).await?;
-        tracing::debug!(len = submissions.len(), "found cached submissions");
+        tracing::info!(len = submissions.len(), "found cached submissions");
 
         ready_submissions.extend(
             submissions
@@ -160,14 +160,14 @@ pub async fn handle_fetch(
                     {
                         tracing::debug!(
                             ?key,
+                            retrieved_at = ?submission.retrieved_at,
+                            older_than = ?older_than,
                             "policy was maybe fetch and was retreived recently enough"
                         );
-                        tracing::trace!("retrieved_at: {:?}", submission.retrieved_at);
-                        tracing::trace!("older_than: {older_than:?}");
                         true
                     }
                     _ => {
-                        tracing::info!(?key, "policy did not permit using cached value");
+                        tracing::debug!(?key, "policy did not permit using cached value");
                         false
                     }
                 })
@@ -195,7 +195,7 @@ pub async fn handle_fetch(
     tracing::debug!("submissions still needing load: {needing_load:?}");
 
     if !needing_load.is_empty() && !matches!(req.policy, FetchPolicy::Never) {
-        tracing::info!(len = needing_load.len(), "loading submissions");
+        tracing::debug!(len = needing_load.len(), "loading submissions");
 
         let task = tokio::spawn(
             async move {
@@ -221,39 +221,37 @@ pub async fn handle_fetch(
         .map_err(|err| async_nats::service::error::Error {
             status: err.to_string(),
             code: 503,
+        })?
+        .map_err(|err| async_nats::service::error::Error {
+            status: err.to_string(),
+            code: 503,
         })?;
 
-        let submissions = submissions
-            .map_err(|err| async_nats::service::error::Error {
-                status: err.to_string(),
-                code: 503,
-            })?
-            .into_iter()
-            .map(|submission| match submission {
-                SubmissionResult::Fetched(submission) => (
-                    (submission.site, submission.submission_id.clone()),
-                    FetchedSubmission {
-                        site: submission.site,
-                        submission_id: submission.submission_id.clone(),
-                        submission: FetchedSubmissionData::Success {
-                            fetch_status: FetchStatus::Fetched,
-                            submission,
-                        },
+        let submissions = submissions.into_iter().map(|submission| match submission {
+            SubmissionResult::Fetched(submission) => (
+                (submission.site, submission.submission_id.clone()),
+                FetchedSubmission {
+                    site: submission.site,
+                    submission_id: submission.submission_id.clone(),
+                    submission: FetchedSubmissionData::Success {
+                        fetch_status: FetchStatus::Fetched,
+                        submission,
                     },
-                ),
-                SubmissionResult::Error {
+                },
+            ),
+            SubmissionResult::Error {
+                site,
+                submission_id,
+                message,
+            } => (
+                (site, submission_id.clone()),
+                FetchedSubmission {
                     site,
                     submission_id,
-                    message,
-                } => (
-                    (site, submission_id.clone()),
-                    FetchedSubmission {
-                        site,
-                        submission_id,
-                        submission: FetchedSubmissionData::Error { message },
-                    },
-                ),
-            });
+                    submission: FetchedSubmissionData::Error { message },
+                },
+            ),
+        });
 
         ready_submissions.extend(submissions);
     }
@@ -263,7 +261,7 @@ pub async fn handle_fetch(
         .filter(|id| !ready_submissions.contains_key(id))
         .cloned()
         .collect();
-    tracing::debug!("submissions still needing load: {needing_load:?}");
+    tracing::trace!("submissions still needing load: {needing_load:?}");
 
     if !needing_load.is_empty()
         && matches!(
@@ -275,7 +273,7 @@ pub async fn handle_fetch(
                 }
         )
     {
-        tracing::warn!("still needed submissions and permits stale, loading");
+        tracing::debug!("still needed submissions and permits stale, loading");
 
         let submissions = fetch_existing_submissions(&pool, &needing_load).await?;
         tracing::info!(len = submissions.len(), "found cached submissions");

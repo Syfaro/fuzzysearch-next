@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Seek, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use eyre::eyre;
@@ -139,7 +139,7 @@ impl LoadSubmissions for &[BoxSite] {
         }
 
         tracing::info!(
-            len = per_site_batches.len(),
+            site_count = per_site_batches.len(),
             "found sites needed to load submissions"
         );
 
@@ -192,7 +192,7 @@ pub async fn process_file(
             eyre::bail!("file was greater than max download size");
         }
 
-        let needed_head_bytes = 8192 - head.len();
+        let needed_head_bytes = 8192_usize.saturating_sub(head.len());
         if !chunk.is_empty() && needed_head_bytes > 0 {
             head.extend(&chunk[..needed_head_bytes.clamp(1, chunk.len())]);
         }
@@ -244,7 +244,7 @@ pub async fn process_file(
     }
 
     file.rewind().await?;
-    let mut file = file.into_std().await;
+    let file = file.into_std().await;
 
     let hashing_span = tracing::info_span!("load_and_hash_image");
     let frames = tokio::task::spawn_blocking(move || {
@@ -259,9 +259,11 @@ pub async fn process_file(
             }
         }
 
-        if infer::is(&head, "gif") {
+        let file = std::io::BufReader::new(file);
+
+        let frames = if infer::is(&head, "gif") {
             tracing::debug!("mime type suggests gif");
-            if let Ok(gif) = foxlib::hash::image::codecs::gif::GifDecoder::new(&file) {
+            if let Ok(gif) = foxlib::hash::image::codecs::gif::GifDecoder::new(file) {
                 let hashes: Vec<_> = gif
                     .into_frames()
                     .filter_map(Result::ok)
@@ -273,26 +275,26 @@ pub async fn process_file(
             }
 
             tracing::warn!("could not be decoded as gif");
-            file.rewind()
-                .tap_err(|err| tracing::error!("could not rewind image: {err}"))
+            None
+        } else {
+            tracing::debug!("mime type suggests image");
+            let im = foxlib::hash::image::io::Reader::new(file)
+                .with_guessed_format()
+                .tap_err(|err| tracing::error!("could not guess format: {err}"))
+                .ok()?
+                .decode()
+                .tap_err(|err| tracing::error!("could not decode image: {err}"))
                 .ok()?;
-        }
+            tracing::info!("loaded static image");
 
-        let file = std::io::BufReader::new(file);
-        let im = foxlib::hash::image::io::Reader::new(file)
-            .with_guessed_format()
-            .tap_err(|err| tracing::error!("could not guess format: {err}"))
-            .ok()?
-            .decode()
-            .tap_err(|err| tracing::error!("could not decode image: {err}"))
-            .ok()?;
-        tracing::info!("loaded static image");
+            Some(vec![hasher.hash_image(&im)])
+        };
 
         if let Err(err) = path.close() {
             tracing::error!("could not close path: {err}");
         }
 
-        Some(vec![hasher.hash_image(&im)])
+        frames
     })
     .await?;
 

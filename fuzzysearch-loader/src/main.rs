@@ -23,6 +23,8 @@ pub struct Config {
 
     #[clap(long, env)]
     database_url: String,
+    #[clap(long, env)]
+    run_migrations: bool,
 
     #[clap(long, env)]
     user_agent: Option<String>,
@@ -77,7 +79,13 @@ async fn main() -> eyre::Result<()> {
     let token = CancellationToken::new();
 
     let metrics = foxlib::MetricsServer::serve(config.metrics_host, false).await;
+
     let pool = PgPool::connect(&config.database_url).await?;
+    if config.run_migrations {
+        tracing::info!("running database migrations");
+        sqlx::migrate!("../migrations").run(&pool).await?;
+    }
+
     let nats = async_nats::ConnectOptions::with_credentials_file(config.nats_creds.clone())
         .await?
         .connect(config.nats_url.clone())
@@ -85,15 +93,14 @@ async fn main() -> eyre::Result<()> {
 
     let mut client_builder = reqwest::ClientBuilder::default().timeout(Duration::from_secs(10));
     if let Some(user_agent) = config.user_agent.as_ref() {
-        tracing::info!("adding user agent to http client");
+        tracing::debug!("adding user agent to http client");
         client_builder = client_builder.user_agent(user_agent);
     }
     let client = client_builder.build()?;
 
     let object_store = AmazonS3Builder::from_env()
         .with_bucket_name(&config.store_bucket)
-        .build()
-        .expect("could not build object store");
+        .build()?;
 
     let ctx = Arc::new(SiteContext {
         config: config.clone(),
@@ -133,11 +140,11 @@ async fn main() -> eyre::Result<()> {
     let active_requests = Arc::new(Semaphore::new(config.concurrent_fetches as usize));
 
     while let Some(request) = requests.next().await {
+        let permit = active_requests.clone().acquire_owned().await?;
+
         let pool = pool.clone();
         let nats = nats.clone();
         let sites = sites.clone();
-
-        let permit = active_requests.clone().acquire_owned().await?;
 
         tokio::spawn(async move {
             match request.message.subject.as_ref() {
