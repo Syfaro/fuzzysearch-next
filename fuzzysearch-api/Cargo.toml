@@ -43,7 +43,7 @@ tracing = "0.1.36"
 tracing-subscriber = "0.3.15"
 url = "2.2.2"
 urlencoding = "2.1.2"
-utoipa = { version = "4.2.0", features = ["axum_extras", "chrono"] }
+utoipa = { version = "4.2.0", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "6.0.0", features = ["axum"] }
 uuid = "1.4.1"
 webauthn-rs = { version = "0.4.8", features = ["resident-key-support", "danger-allow-state-serialisation", "preview-features"] }

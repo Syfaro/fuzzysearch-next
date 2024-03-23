@@ -467,7 +467,7 @@ pub async fn ws_live(
 
     let stream = consumer.messages().await?;
 
-    Ok(ws.on_upgrade(move |socket| handle_live_socket(socket, stream, token)))
+    Ok(ws.on_upgrade(move |socket| handle_live_socket(socket, stream, token.child_token())))
 }
 
 #[derive(Serialize)]

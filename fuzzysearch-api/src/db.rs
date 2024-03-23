@@ -301,7 +301,6 @@ pub async fn lookup_hashes(
         )
         .await
         .map_err(|err| eyre::eyre!("request error: {err}"))?;
-    tracing::trace!("resp msg: {msg:?}");
     let resp: FetchResponse = serde_json::from_slice(&msg.payload)?;
 
     let results: Vec<_> = resp

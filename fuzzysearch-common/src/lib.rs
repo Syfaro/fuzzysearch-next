@@ -343,7 +343,7 @@ pub struct FetchedSubmission {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[cfg_attr(feature = "api-types", derive(ToSchema))]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", tag = "status")]
 pub enum FetchedSubmissionData {
     // The submission was successfully loaded.
     Success {
