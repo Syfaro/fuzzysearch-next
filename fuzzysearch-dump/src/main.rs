@@ -172,8 +172,7 @@ async fn main() {
             .split('/')
             .last()
             .expect("could not get path from url")
-            .try_into()
-            .unwrap();
+            .into();
         tracing::info!(%path, "deleting old dump");
 
         if let Err(err) = object_store.delete(&path).await {
