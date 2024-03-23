@@ -4,19 +4,20 @@ use askama::Template;
 use askama_axum::IntoResponse;
 use axum::{
     async_trait,
-    extract::FromRequestParts,
-    http::{request::Parts, HeaderValue, Request, StatusCode},
+    extract::{FromRequestParts, Request},
+    http::{request::Parts, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::Response,
     routing, Extension, Form, Json, RequestPartsExt, Router,
 };
-use axum_sessions::extractors::{ReadableSession, WritableSession};
 use eyre::ContextCompat;
 use foxlib::flags::Context;
+use futures::TryFutureExt;
 use rand::distributions::DistString;
 use serde::Deserialize;
 use sqlx::{types::Uuid, PgPool};
 use thiserror::Error;
+use tower_sessions::Session;
 use webauthn_rs::{prelude::Passkey, Webauthn};
 use webauthn_rs_proto::{
     AuthenticatorAttachment, AuthenticatorSelectionCriteria, UserVerificationPolicy,
@@ -56,19 +57,26 @@ impl std::ops::Deref for UnleashContext {
     }
 }
 
-pub async fn unleash_context<B>(req: Request<B>, next: Next<B>) -> Result<Response, HxError> {
+pub async fn unleash_context(req: Request, next: Next) -> Result<Response, HxError> {
     let (mut parts, body) = req.into_parts();
 
-    let data = parts
-        .extract::<ReadableSession>()
-        .await
-        .ok()
-        .map(|session| {
-            (
-                session.id().to_string(),
-                session.get::<Uuid>("account_id").map(|id| id.to_string()),
-            )
-        });
+    let (session_id, account_id) = if let Ok(session) = parts.extract::<Session>().await {
+        let session_id = session.id().map(|id| id.to_string());
+
+        let account_id = if let Ok(account_id) = session
+            .get::<Uuid>("account_id")
+            .map_ok(|id| id.map(|id| id.to_string()))
+            .await
+        {
+            account_id
+        } else {
+            None
+        };
+
+        (session_id, account_id)
+    } else {
+        (None, None)
+    };
 
     let unleash = match parts.extensions.get::<Unleash>() {
         Some(unleash) => unleash,
@@ -78,11 +86,6 @@ pub async fn unleash_context<B>(req: Request<B>, next: Next<B>) -> Result<Respon
                 StatusCode::SERVICE_UNAVAILABLE,
             ))
         }
-    };
-
-    let (session_id, account_id) = match data {
-        Some((session_id, account_id)) => (Some(session_id), account_id),
-        None => (None, None),
     };
 
     let context = Context {
@@ -139,6 +142,10 @@ pub enum HxError {
         text: Cow<'static, str>,
         status_code: StatusCode,
     },
+    #[error("Session Error: {0}")]
+    Session(#[from] tower_sessions::session::Error),
+    #[error("Header Error: {0}")]
+    Header(#[from] axum::http::header::InvalidHeaderValue),
 }
 
 impl HxError {
@@ -154,7 +161,9 @@ impl HxError {
 
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::Database(_) | Self::Unknown(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Database(_) | Self::Unknown(_) | Self::Session(_) | Self::Header(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             Self::Serialization(_) | Self::WebAuthn(_) | Self::Value(_) => StatusCode::BAD_REQUEST,
             Self::Message { status_code, .. } => *status_code,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
@@ -172,11 +181,16 @@ where
     type Rejection = HxError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let session = ReadableSession::from_request_parts(parts, state)
+        let session = Session::from_request_parts(parts, state)
             .await
-            .map_err(eyre::Report::from)?;
+            .map_err(|(_status_code, message)| eyre::Report::msg(message))?;
 
-        let account_id = session.get("account_id").ok_or(HxError::Unauthorized)?;
+        let account_id = session
+            .get("account_id")
+            .await
+            .ok()
+            .flatten()
+            .ok_or(HxError::Unauthorized)?;
         tracing::info!(%account_id, "found user from request");
 
         Ok(Self(account_id))
@@ -295,10 +309,10 @@ fn filter_name_to_len(s: &str, n: usize) -> String {
 }
 
 #[tracing::instrument(skip(webauthn, resp, session))]
-fn prepare_registration(
+async fn prepare_registration(
     webauthn: &Webauthn,
     resp: &mut Response,
-    session: &mut WritableSession,
+    session: Session,
     account_id: Uuid,
     username: &str,
 ) -> Result<(), HxError> {
@@ -310,8 +324,8 @@ fn prepare_registration(
         user_verification: UserVerificationPolicy::Required,
     });
 
-    session.insert("account_id", account_id)?;
-    session.insert("reg_state", reg_state)?;
+    session.insert("account_id", account_id).await?;
+    session.insert("reg_state", reg_state).await?;
 
     let event = serde_json::json!({
         "performRegistration": {
@@ -327,16 +341,16 @@ fn prepare_registration(
 }
 
 #[tracing::instrument(skip_all)]
-fn prepare_login(
+async fn prepare_login(
     webauthn: &Webauthn,
     resp: &mut Response,
-    session: &mut WritableSession,
+    session: Session,
     creds: &[Passkey],
 ) -> Result<(), HxError> {
     let (mut rcr, passkey_auth) = webauthn.start_passkey_authentication(creds)?;
     rcr.public_key.user_verification = UserVerificationPolicy::Required;
 
-    session.insert("auth_state", passkey_auth)?;
+    session.insert("auth_state", passkey_auth).await?;
 
     let event = serde_json::json!({
         "performLogin": {
@@ -357,8 +371,8 @@ struct IndexTemplate<'a> {
     auth_form: AuthFormTemplate<'a>,
 }
 
-async fn find_username(pool: &PgPool, session: &ReadableSession) -> Option<String> {
-    let account_id: Uuid = session.get("account_id")?;
+async fn find_username(pool: &PgPool, session: Session) -> Option<String> {
+    let account_id: Uuid = session.get("account_id").await.ok()??;
 
     sqlx::query_file_scalar!("queries/selfserve/lookup_username_by_id.sql", account_id)
         .fetch_optional(pool)
@@ -367,8 +381,8 @@ async fn find_username(pool: &PgPool, session: &ReadableSession) -> Option<Strin
         .flatten()
 }
 
-async fn index(Extension(pool): Extension<PgPool>, session: ReadableSession) -> Response {
-    let username = find_username(&pool, &session).await;
+async fn index(Extension(pool): Extension<PgPool>, session: Session) -> Response {
+    let username = find_username(&pool, session).await;
 
     IndexTemplate {
         auth_form: AuthFormTemplate {
@@ -429,7 +443,7 @@ impl AuthFormTemplate<'_> {
 async fn auth_form(
     Extension(webauthn): Extension<Arc<Webauthn>>,
     Extension(pool): Extension<PgPool>,
-    mut session: WritableSession,
+    session: Session,
     Form(form): Form<AuthForm>,
 ) -> Result<Response, HxError> {
     let username = filter_name_to_len(&form.username.unwrap_or_default(), USERNAME_MAX_LENGTH);
@@ -465,18 +479,18 @@ async fn auth_form(
         let creds = credentials_for_user(&pool, &username).await?;
 
         if creds.is_empty() {
-            return handle_no_creds(&webauthn, &mut session, &username, created_at);
+            return handle_no_creds(&webauthn, session, &username, created_at).await;
         } else {
-            prepare_login(&webauthn, &mut resp, &mut session, &creds)?;
+            prepare_login(&webauthn, &mut resp, session, &creds).await?;
         }
     }
 
     Ok(resp)
 }
 
-fn handle_no_creds(
+async fn handle_no_creds(
     webauthn: &Webauthn,
-    session: &mut WritableSession,
+    session: Session,
     username: &str,
     created_at: Option<(Uuid, chrono::DateTime<chrono::Utc>)>,
 ) -> Result<Response, HxError> {
@@ -485,7 +499,7 @@ fn handle_no_creds(
     let resp = if let Some((account_id, reg_at)) = created_at {
         tracing::debug!(%reg_at, "found user created at");
 
-        if reg_at + chrono::Duration::minutes(5) < chrono::Utc::now() {
+        if reg_at + chrono::Duration::try_minutes(5).unwrap() < chrono::Utc::now() {
             tracing::info!("created at older than 5 minutes, allowing registration");
 
             let mut resp = AlertTemplate::new(
@@ -494,7 +508,7 @@ fn handle_no_creds(
             )
             .into_response();
 
-            prepare_registration(webauthn, &mut resp, session, account_id, username)?;
+            prepare_registration(webauthn, &mut resp, session, account_id, username).await?;
 
             resp
         } else {
@@ -521,7 +535,7 @@ fn handle_no_creds(
 async fn register_start(
     Extension(webauthn): Extension<Arc<Webauthn>>,
     Extension(pool): Extension<PgPool>,
-    mut session: WritableSession,
+    session: Session,
     Form(form): Form<AuthForm>,
 ) -> Result<Response, HxError> {
     let username = filter_name_to_len(&form.username.unwrap_or_default(), USERNAME_MAX_LENGTH);
@@ -545,7 +559,7 @@ async fn register_start(
     )
     .into_response();
 
-    prepare_registration(&webauthn, &mut resp, &mut session, account_id, &username)?;
+    prepare_registration(&webauthn, &mut resp, session, account_id, &username).await?;
 
     tx.commit().await?;
 
@@ -564,10 +578,13 @@ async fn register_finish(
     Extension(webauthn): Extension<Arc<Webauthn>>,
     Extension(pool): Extension<PgPool>,
     HxUser(account_id): HxUser,
-    mut session: WritableSession,
+    session: Session,
     Form(reg): Form<AuthRegisterFinishForm>,
 ) -> Result<Response, HxError> {
-    let auth_state = session.get("reg_state").context("missing reg_state")?;
+    let auth_state = session
+        .get("reg_state")
+        .await?
+        .context("missing reg_state")?;
 
     let reg = serde_json::from_str(&reg.att)?;
     let auth_result = webauthn.finish_passkey_registration(&reg, &auth_state)?;
@@ -583,7 +600,7 @@ async fn register_finish(
     .execute(&pool)
     .await?;
 
-    session.remove("reg_state");
+    let _ = session.remove::<()>("reg_state").await;
 
     tracing::info!("finished registering user");
 
@@ -594,7 +611,7 @@ async fn login_start(
     Extension(unleash): Extension<Unleash>,
     Extension(webauthn): Extension<Arc<Webauthn>>,
     Extension(context): Extension<UnleashContext>,
-    mut session: WritableSession,
+    session: Session,
 ) -> Result<Response, HxError> {
     if !unleash.is_enabled(Features::DiscoverableAuth, Some(&context), false) {
         return Ok(Json(false).into_response());
@@ -603,7 +620,9 @@ async fn login_start(
     let (mut rcr, discoverable_auth) = webauthn.start_discoverable_authentication()?;
     rcr.public_key.user_verification = UserVerificationPolicy::Required;
 
-    session.insert("discoverable_auth", discoverable_auth)?;
+    session
+        .insert("discoverable_auth", discoverable_auth)
+        .await?;
 
     Ok(Json(rcr).into_response())
 }
@@ -619,18 +638,14 @@ async fn login_finish(
     Extension(webauthn): Extension<Arc<Webauthn>>,
     Extension(pool): Extension<PgPool>,
     Extension(context): Extension<UnleashContext>,
-    mut session: WritableSession,
+    session: Session,
     Form(reg): Form<AuthLoginFinishForm>,
 ) -> Result<Response, HxError> {
     let reg = serde_json::from_str(&reg.pkc)?;
 
-    let auth_result = if let Some(auth_state) = session.get("auth_state") {
-        session.remove("auth_state");
-
+    let auth_result = if let Ok(Some(auth_state)) = session.remove("auth_state").await {
         webauthn.finish_passkey_authentication(&reg, &auth_state)?
-    } else if let Some(discoverable_auth) = session.get("discoverable_auth") {
-        session.remove("discoverable_auth");
-
+    } else if let Ok(Some(discoverable_auth)) = session.remove("discoverable_auth").await {
         if !unleash.is_enabled(Features::DiscoverableAuth, Some(&context), false) {
             return Err(HxError::message(
                 "Discoverable authentication is not enabled.",
@@ -661,7 +676,7 @@ async fn login_finish(
     .fetch_one(&pool)
     .await?;
 
-    session.insert("account_id", account_id)?;
+    session.insert("account_id", account_id).await?;
     tracing::info!(%account_id, "finished signing in user");
 
     Ok(api_keys_resp(&pool, account_id, None).await.into_response())

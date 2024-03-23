@@ -382,7 +382,7 @@ pub async fn lookup_submissions(
             }
 
             FetchPolicy::Maybe {
-                older_than: chrono::Utc::now() - chrono::Duration::days(days),
+                older_than: chrono::Utc::now() - chrono::Duration::try_days(days).unwrap(),
                 return_stale: true,
             }
         } else {
@@ -447,7 +447,7 @@ pub async fn ws_live(
             tracing::info!("starting consumer at seq {start_sequence}");
             DeliverPolicy::ByStartSequence { start_sequence }
         }
-        Some(start_sequence) if start_sequence == 0 => {
+        Some(0) => {
             tracing::info!("starting consumer at beginning");
             DeliverPolicy::All
         }

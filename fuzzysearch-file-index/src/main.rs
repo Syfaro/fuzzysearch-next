@@ -42,6 +42,9 @@ struct Config {
     /// PostgreSQL database URL.
     #[clap(short = 'd', long, env)]
     database_url: String,
+    /// Run database migrations.
+    #[clap(long, env)]
+    skip_migrations: bool,
 
     #[clap(flatten)]
     prometheus: PrometheusConfig,
@@ -149,8 +152,10 @@ async fn main() -> Result<()> {
     tracing::debug!("connecting to database");
     let pool = PgPool::connect(&config.database_url).await?;
 
-    tracing::trace!("running database migrations");
-    sqlx::migrate!().run(&pool).await?;
+    if !config.skip_migrations {
+        tracing::trace!("running database migrations");
+        sqlx::migrate!().run(&pool).await?;
+    }
 
     let available_parallelism: usize = std::thread::available_parallelism()?.into();
 
@@ -343,8 +348,7 @@ async fn main() -> Result<()> {
                 }
 
                 let color = if use_color {
-                    (count * color_scale).clamp(0, ImageDepth::MAX.try_into().unwrap())
-                        as ImageDepth
+                    (count * color_scale).clamp(0, ImageDepth::MAX.into()) as ImageDepth
                 } else {
                     0
                 };

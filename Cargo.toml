@@ -8,5 +8,7 @@ members = [
     "fuzzysearch-loader",
 ]
 
+resolver = "2"
+
 [workspace.metadata.release]
 sign-tag = true

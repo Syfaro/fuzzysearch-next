@@ -1,21 +1,22 @@
 use std::{collections::HashMap, time::Duration};
 
 use axum::{
-    headers::{authorization::Bearer, Authorization},
-    http::{HeaderMap, HeaderValue, Request, StatusCode},
+    extract::Request,
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     middleware::Next,
     response::Response,
-    RequestExt, TypedHeader,
+    RequestExt,
 };
+use axum_extra::TypedHeader;
 use bkapi_client::BKApiClient;
 use chrono::TimeZone;
 use eyre::Context;
+use headers::{authorization::Bearer, Authorization};
 use lazy_static::lazy_static;
 use prometheus::{
     register_histogram, register_int_counter, register_int_counter_vec, Histogram, IntCounter,
     IntCounterVec,
 };
-use reqwest::header::HeaderName;
 use serde::Serialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -74,10 +75,7 @@ pub struct UserApiKey {
     pub hash_limit: i32,
 }
 
-pub async fn extract_api_key<B>(mut req: Request<B>, next: Next<B>) -> Result<Response, StatusCode>
-where
-    B: Send + 'static,
-{
+pub async fn extract_api_key(mut req: Request, next: Next) -> Result<Response, StatusCode> {
     let api_key = if let Ok(header) = req
         .extract_parts::<TypedHeader<Authorization<Bearer>>>()
         .await
@@ -287,7 +285,7 @@ pub async fn lookup_hashes(
         query: SubmissionQuery::PerceptualHash { hashes: all_hashes },
         policy: match refresh_days {
             Some(days) if distance <= 3 => FetchPolicy::Maybe {
-                older_than: chrono::Utc::now() - chrono::Duration::days(days),
+                older_than: chrono::Utc::now() - chrono::Duration::try_days(days).unwrap(),
                 return_stale: true,
             },
             _ => FetchPolicy::Never,
