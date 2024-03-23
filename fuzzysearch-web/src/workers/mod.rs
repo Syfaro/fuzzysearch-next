@@ -47,10 +47,10 @@ impl Worker for ImageHasherWorker {
 }
 
 impl ImageHasherWorker {
-    fn get_hasher() -> img_hash::Hasher<[u8; 8]> {
-        use img_hash::HashAlg;
+    fn get_hasher() -> image_hasher::Hasher<[u8; 8]> {
+        use image_hasher::HashAlg;
 
-        img_hash::HasherConfig::with_bytes_type::<[u8; 8]>()
+        image_hasher::HasherConfig::with_bytes_type::<[u8; 8]>()
             .hash_alg(HashAlg::Gradient)
             .hash_size(8, 8)
             .preproc_dct()

@@ -10,11 +10,10 @@ chrono = { version = "0.4.22", features = ["serde"] }
 clap = { version = "4.1.1", features = ["env", "derive"] }
 csv = "1.1.6"
 eyre = "0.6.8"
+foxlib = { git = "https://github.com/Syfaro/foxlib.git", features = ["hash"] }
 futures = "0.3.23"
 futures-batch = "0.6"
 hex = "0.4.3"
-image = "0.23.14"
-img_hash = "3.2.0"
 infer = "0.15.0"
 kamadak-exif = "0.5.4"
 lazy_static = "1.4.0"

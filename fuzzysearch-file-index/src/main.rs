@@ -7,9 +7,9 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use eyre::Result;
+use foxlib::hash::image::{self, GenericImageView};
 use futures::StreamExt;
 use futures_batch::ChunksTimeoutStreamExt;
-use image::GenericImageView;
 use lazy_static::lazy_static;
 use prometheus::{register_counter, register_histogram, Counter, Histogram};
 use serde::{Deserialize, Serialize};
@@ -562,18 +562,12 @@ async fn evaluate_file(path: PathBuf) -> Result<File> {
     let (width, height, perceptual_gradient) = if let Some(image) = image {
         let (width, height) = image.dimensions();
 
-        let hasher = img_hash::HasherConfig::with_bytes_type::<[u8; 8]>()
-            .hash_alg(img_hash::HashAlg::Gradient)
-            .hash_size(8, 8)
-            .preproc_dct()
-            .to_hasher();
-
-        let perceptual_gradient: [u8; 8] = hasher.hash_image(&image).as_bytes().try_into().unwrap();
+        let perceptual_gradient = foxlib::hash::ImageHasher::default().hash_image(&image);
 
         (
             Some(width as i32),
             Some(height as i32),
-            Some(i64::from_be_bytes(perceptual_gradient)),
+            Some(perceptual_gradient.into()),
         )
     } else {
         (None, None, None)
