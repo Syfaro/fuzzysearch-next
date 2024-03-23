@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use async_nats::service::ServiceExt;
 use clap::Parser;
@@ -19,7 +19,7 @@ pub struct Config {
     #[clap(long, env)]
     nats_url: String,
     #[clap(long, env)]
-    nats_creds: PathBuf,
+    nats_nkey: String,
 
     #[clap(long, env)]
     database_url: String,
@@ -86,8 +86,7 @@ async fn main() -> eyre::Result<()> {
         sqlx::migrate!("../migrations").run(&pool).await?;
     }
 
-    let nats = async_nats::ConnectOptions::with_credentials_file(config.nats_creds.clone())
-        .await?
+    let nats = async_nats::ConnectOptions::with_nkey(config.nats_nkey.clone())
         .connect(config.nats_url.clone())
         .await?;
 

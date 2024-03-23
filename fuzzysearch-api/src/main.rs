@@ -1,4 +1,4 @@
-use std::{fmt::Display, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{fmt::Display, net::SocketAddr, sync::Arc};
 
 use axum::{
     async_trait,
@@ -57,7 +57,7 @@ struct Config {
     #[clap(long, env)]
     nats_url: String,
     #[clap(long, env)]
-    nats_creds: PathBuf,
+    nats_nkey: String,
 
     #[clap(long, env)]
     session_secret: String,
@@ -105,8 +105,7 @@ async fn main() -> eyre::Result<()> {
     let pool = PgPool::connect(&config.database_url).await?;
     let bkapi = BKApiClient::new(config.bkapi_endpoint);
 
-    let nats = async_nats::ConnectOptions::with_credentials_file(config.nats_creds)
-        .await?
+    let nats = async_nats::ConnectOptions::with_nkey(config.nats_nkey)
         .connect(config.nats_url)
         .await?;
 
