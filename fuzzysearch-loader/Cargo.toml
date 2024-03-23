@@ -2,6 +2,9 @@
 name = "fuzzysearch-loader"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+authors = ["Syfaro <syfaro@huefox.com>"]
+publish = false
 
 [dependencies]
 async-nats = { version = "0.34.0", features = ["service"] }
