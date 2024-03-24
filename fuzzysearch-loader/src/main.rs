@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_nats::service::ServiceExt;
 use clap::Parser;
@@ -7,6 +7,7 @@ use object_store::aws::AmazonS3Builder;
 use sqlx::PgPool;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 mod requests;
 mod sites;
@@ -15,6 +16,8 @@ mod sites;
 pub struct Config {
     #[clap(long, env)]
     metrics_host: SocketAddr,
+    #[clap(long, env)]
+    json_logs: bool,
 
     #[clap(long, env)]
     nats_url: String,
@@ -71,7 +74,7 @@ async fn main() -> eyre::Result<()> {
         namespace: "fuzzysearch",
         name: env!("CARGO_PKG_NAME"),
         version: env!("CARGO_PKG_VERSION"),
-        otlp: false,
+        otlp: config.json_logs,
     });
 
     ffmpeg_next::init()?;
@@ -145,23 +148,50 @@ async fn main() -> eyre::Result<()> {
         let nats = nats.clone();
         let sites = sites.clone();
 
-        tokio::spawn(async move {
-            match request.message.subject.as_ref() {
-                "fuzzysearch.loader.fetch" => {
-                    let resp = requests::handle_fetch(pool, nats, sites, &request.message).await;
+        let span = tracing::info_span!("service_request", subject = %request.message.subject);
 
-                    if let Err(err) = request.respond(resp).await {
-                        tracing::error!("could not reply to service request: {err}");
+        tracing::debug!(message = ?request.message);
+
+        if let Some(headers) = request.message.headers.as_ref() {
+            let headers: HashMap<_, _> = headers
+                .iter()
+                .flat_map(|(name, value)| {
+                    value
+                        .first()
+                        .map(|value| (name.to_string(), value.to_string()))
+                })
+                .collect();
+
+            tracing::trace!(?headers, "got message headers");
+
+            let cx = opentelemetry::global::get_text_map_propagator(|propagator| {
+                propagator.extract(&headers)
+            });
+
+            tracing_opentelemetry::OpenTelemetrySpanExt::set_parent(&span, cx);
+        }
+
+        tokio::spawn(
+            async move {
+                match request.message.subject.as_ref() {
+                    "fuzzysearch.loader.fetch" => {
+                        let resp =
+                            requests::handle_fetch(pool, nats, sites, &request.message).await;
+
+                        if let Err(err) = request.respond(resp).await {
+                            tracing::error!("could not reply to service request: {err}");
+                        }
                     }
+                    "fuzzysearch.loader.watch" => {
+                        todo!("watching")
+                    }
+                    _ => unreachable!("got unknown subject: {}", request.message.subject),
                 }
-                "fuzzysearch.loader.watch" => {
-                    todo!("watching")
-                }
-                _ => unreachable!("got unknown subject: {}", request.message.subject),
-            }
 
-            drop(permit);
-        });
+                drop(permit);
+            }
+            .instrument(span),
+        );
     }
 
     tracing::info!("shutting down");
