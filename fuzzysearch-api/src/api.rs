@@ -267,7 +267,7 @@ enum UrlError {
         ("api_key" = [])
     )
 )]
-#[tracing::instrument(err, skip_all)]
+#[tracing::instrument(err, skip_all, fields(url = query.url))]
 pub async fn search_image_by_url(
     Extension(pool): Extension<PgPool>,
     Extension(bkapi): Extension<BKApiClient>,
@@ -362,7 +362,7 @@ pub struct FurAffinityFileQuery {
         ("api_key" = [])
     )
 )]
-#[tracing::instrument(err, skip_all)]
+#[tracing::instrument(err, skip_all, fields(search = query.search))]
 pub async fn lookup_furaffinity_file(
     Extension(pool): Extension<PgPool>,
     Extension(api_key): Extension<db::UserApiKey>,
