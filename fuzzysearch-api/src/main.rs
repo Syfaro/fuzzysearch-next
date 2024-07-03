@@ -2,6 +2,7 @@ use std::{fmt::Display, net::SocketAddr, sync::Arc};
 
 use axum::{
     async_trait,
+    extract::DefaultBodyLimit,
     http::{header::HeaderName, Method, StatusCode},
     middleware,
     response::{IntoResponse, Redirect},
@@ -123,7 +124,10 @@ async fn main() -> eyre::Result<()> {
 
     let authenticated_api = Router::new()
         .route("/hashes", routing::get(api::search_image_by_hashes))
-        .route("/image", routing::post(api::search_image_by_upload))
+        .route(
+            "/image",
+            routing::post(api::search_image_by_upload).layer(DefaultBodyLimit::disable()),
+        )
         .route("/url", routing::get(api::search_image_by_url))
         .route(
             "/file/furaffinity",

@@ -167,6 +167,7 @@ enum ImageError {
         (status = 429, description = "Rate limit exhausted"),
         (status = 400, description = "Image was invalid", body = ImageError),
         (status = 401, description = "Invalid or missing API token"),
+        (status = 413, description = "Image payload was too large")
     ),
     security(
         ("api_key" = [])
@@ -205,7 +206,9 @@ pub async fn search_image_by_upload(
         let mut buf = bytes::BytesMut::new();
         while let Some(chunk) = field.chunk().await? {
             if buf.len() + chunk.len() > MAX_UPLOAD_SIZE {
-                return Ok((StatusCode::OK, Json(ImageError::TooLarge)).into_response());
+                return Ok(
+                    (StatusCode::PAYLOAD_TOO_LARGE, Json(ImageError::TooLarge)).into_response()
+                );
             }
 
             buf.put(chunk);
